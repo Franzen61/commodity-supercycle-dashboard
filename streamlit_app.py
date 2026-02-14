@@ -1,4 +1,4 @@
-```python
+
 """
 COMMODITY SUPERCYCLE DASHBOARD
 Versione 1.1 - Macro Cycle Model
