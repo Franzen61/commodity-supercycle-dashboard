@@ -15,6 +15,7 @@ st.title("Commodity Supercycle Regime Model")
 
 @st.cache_data
 def load_data():
+
     tickers = {
         "Copper": "HG=F",
         "Gold": "GC=F",
@@ -24,10 +25,21 @@ def load_data():
         "CPI": "CPIAUCSL"
     }
 
-    data = yf.download(list(tickers.values()), start="2000-01-01")["Adj Close"]
-    data.columns = tickers.keys()
+    data = pd.DataFrame()
 
-    # CPI monthly -> forward fill
+    for name, ticker in tickers.items():
+
+        df = yf.download(ticker, start="2000-01-01", progress=False)
+
+        # CPI non ha Adj Close
+        if "Adj Close" in df.columns:
+            series = df["Adj Close"]
+        else:
+            series = df["Close"]
+
+        data[name] = series
+
+    # CPI è mensile → trasformiamo in giornaliero
     data["CPI"] = data["CPI"].resample("D").ffill()
 
     return data.dropna()
