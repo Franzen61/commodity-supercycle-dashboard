@@ -51,6 +51,7 @@ def load_data(years, frequency, inflation_rate):
     tickers = {
         "Copper": "HG=F",
         "Gold": "GC=F",
+        "Oil": "CL=F",  # WTI Crude Oil Futures
         "DXY": "DX-Y.NYB",
         "GSCI": "^SPGSCI",
         "US_10Y": "^TNX",
@@ -131,6 +132,15 @@ else:
         st.sidebar.warning("⚠️ Gold data missing")
     df["Copper_Gold"] = np.nan
 
+# Oil/Gold Ratio
+if "Oil" in df.columns and "Gold" in df.columns:
+    df["Oil_Gold"] = df["Oil"] / df["Gold"]
+    st.sidebar.success(f"✅ Oil/Gold calculated: {df['Oil_Gold'].iloc[-1]:.4f}")
+else:
+    if "Oil" not in df.columns:
+        st.sidebar.warning("⚠️ Oil data missing")
+    df["Oil_Gold"] = np.nan
+
 # Momentum
 if "GSCI" in df.columns:
     # Per weekly: 26 settimane = 6 mesi
@@ -143,7 +153,7 @@ else:
     df["Momentum_6M"] = np.nan
 
 # Rimuovi NaN
-df = df.dropna(subset=["Copper_Gold", "Real_Yield", "Momentum_6M"])
+df = df.dropna(subset=["Copper_Gold", "Oil_Gold", "Real_Yield", "Momentum_6M"])
 
 if df.empty:
     st.error("❌ Not enough data after calculations")
@@ -155,7 +165,7 @@ if data_frequency == "Weekly":
 else:
     window = 36
 
-indicators = ["Copper_Gold", "Real_Yield", "DXY", "Momentum_6M"]
+indicators = ["Copper_Gold", "Oil_Gold", "Real_Yield", "DXY", "Momentum_6M"]
 
 for col in indicators:
     if col in df.columns:
@@ -184,6 +194,10 @@ if "Real_Yield_z" in df.columns:
 if "Copper_Gold_z" in df.columns:
     score_components.append((df["Copper_Gold_z"] > 0).astype(int))
     available_indicators.append("Copper/Gold > 0")
+
+if "Oil_Gold_z" in df.columns:
+    score_components.append((df["Oil_Gold_z"] > 0).astype(int))
+    available_indicators.append("Oil/Gold > 0")
     
 if "DXY_z" in df.columns:
     score_components.append((df["DXY_z"] < 0).astype(int))
@@ -191,7 +205,7 @@ if "DXY_z" in df.columns:
     
 if "Momentum_6M_z" in df.columns:
     score_components.append((df["Momentum_6M_z"] > 0).astype(int))
-    available_indicators.append("Momentum > 0")
+    available_indicators.append("GSCI Momentum > 0")
 
 if len(score_components) > 0:
     df["Score"] = sum(score_components)
@@ -213,7 +227,7 @@ latest = df.iloc[-1]
 st.markdown("---")
 st.subheader("📈 Current Market Regime")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
     st.metric("Regime Score", f"{int(latest['Score'])}/{max_score}")
@@ -239,6 +253,11 @@ with col5:
     # Copper/Gold
     if "Copper_Gold" in df.columns:
         st.metric("Cu/Au Ratio", f"{latest['Copper_Gold']:.4f}")
+
+with col6:
+    # Oil/Gold
+    if "Oil_Gold" in df.columns:
+        st.metric("Oil/Au Ratio", f"{latest['Oil_Gold']:.4f}")
 
 # Indicatori attivi
 st.markdown(f"**Active Signals ({int(latest['Score'])}/{max_score}):** " + " | ".join([
@@ -337,14 +356,14 @@ with tab3:
     st.subheader("💹 Raw Indicators")
     
     # Plot each indicator in separate subplots per migliore leggibilità
-    raw_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M"]
+    raw_cols = ["Real_Yield", "Copper_Gold", "Oil_Gold", "DXY", "Momentum_6M"]
     available_raw = [col for col in raw_cols if col in df.columns]
     
     if len(available_raw) > 0:
         fig3 = make_subplots(
             rows=len(available_raw), 
             cols=1,
-            subplot_titles=[col.replace('_', ' ') for col in available_raw],
+            subplot_titles=[col.replace('_', ' ').replace('Au', 'Gold') for col in available_raw],
             vertical_spacing=0.08
         )
         
@@ -380,7 +399,7 @@ with tab3:
     
     # Data table
     st.subheader("📋 Latest Data")
-    display_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M", "Score", "Prob"]
+    display_cols = ["Real_Yield", "Copper_Gold", "Oil_Gold", "DXY", "Momentum_6M", "Score", "Prob"]
     available_display = [col for col in display_cols if col in df.columns]
     
     if len(available_display) > 0:
@@ -418,15 +437,23 @@ with tab4:
        - Negative real yields = supportive for commodities
        
     2. **Copper/Gold Ratio** (Z-score > 0)
-       - Rising ratio = economic growth signal
+       - Rising ratio = industrial demand strength signal
        
-    3. **Dollar Index** (Z-score < 0)
+    3. **Oil/Gold Ratio** (Z-score > 0)
+       - Rising ratio = energy demand and economic activity
+       
+    4. **Dollar Index** (Z-score < 0)
        - Weak dollar = positive for commodity prices
        
-    4. **6-Month Momentum** (Z-score > 0)
-       - Positive momentum = trend strength
+    5. **GSCI Momentum 6M** (Z-score > 0)
+       - Positive momentum = broad commodity trend strength
     
-    **Total Score**: 0-4
+    **Total Score**: 0-5
+    
+    **Why Oil/Gold?**
+    - Oil = proxy for global economic activity and energy demand
+    - Complements Copper/Gold (industrial metals) with energy component
+    - GSCI is 50-60% energy-weighted, so Oil separate provides clarity
     
     #### Z-Score Normalization
     
@@ -437,12 +464,14 @@ with tab4:
     #### Probability Function
     
     ```
-    P(Supercycle) = 1 / (1 + e^(-1.5 × (Score - 2)))
+    P(Supercycle) = 1 / (1 + e^(-1.5 × (Score_Normalized - 2)))
     ```
     
-    - **Score 0-1**: Bear regime (P < 25%)
-    - **Score 2**: Neutral (P ≈ 50%)
-    - **Score 3-4**: Supercycle (P > 75%)
+    Where Score_Normalized scales the actual score (0-5) to range 0-4 for the sigmoid function.
+    
+    - **Score 0-2**: Bear regime (P < 35%)
+    - **Score 2-3**: Neutral/Transition (P ≈ 35-65%)
+    - **Score 4-5**: Supercycle (P > 65%)
     
     #### Data Sources
     
