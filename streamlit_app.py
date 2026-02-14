@@ -183,4 +183,3 @@ corr = data.dropna().corr()
 
 fig = px.imshow(corr, text_auto=".2f", zmin=-1, zmax=1)
 st.plotly_chart(fig, use_container_width=True)
-```
