@@ -1,185 +1,107 @@
-
-"""
-COMMODITY SUPERCYCLE DASHBOARD
-Versione 1.1 - Macro Cycle Model
-"""
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# -----------------------------------------------------------------------------
-# PAGE CONFIG
-# -----------------------------------------------------------------------------
+st.set_page_config(layout="wide")
 
-st.set_page_config(
-    page_title="Commodity Supercycle Dashboard",
-    page_icon="📈",
-    layout="wide"
-)
+st.title("Commodity Supercycle Regime Model")
 
-st.title("📊 Commodity Supercycle Dashboard")
-st.markdown("Analisi macro ciclica e regime commodities")
+# -------------------------------
+# DATA DOWNLOAD
+# -------------------------------
 
-# -----------------------------------------------------------------------------
-# SIDEBAR
-# -----------------------------------------------------------------------------
-
-with st.sidebar:
-    st.header("Configurazione")
-
-    years_back = st.slider("Anni di storico", 5, 25, 15)
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=years_back * 365)
-
-    commodity_choice = st.selectbox(
-        "Indice Commodity",
-        ["DBC", "GSG"]
-    )
-
-    ticker_map = {
-        "DBC": "DBC",
-        "GSG": "GSG"
-    }
-
-    main_commodity = ticker_map[commodity_choice]
-    rolling_window = st.slider("Rolling correlation", 30, 400, 252)
-
-# -----------------------------------------------------------------------------
-# DATA LOAD
-# -----------------------------------------------------------------------------
-
-@st.cache_data(ttl=3600)
-def load_data(start, end, commodity_ticker):
-
+@st.cache_data
+def load_data():
     tickers = {
-        "Commodity": commodity_ticker,
         "Copper": "HG=F",
         "Gold": "GC=F",
-        "Oil": "CL=F",
         "DXY": "DX-Y.NYB",
-        "US_10Y": "^TNX",
-        "US_2Y": "^FVX",
-        "SPX": "^GSPC",
-        "VIX": "^VIX",
-        "TIP": "TIP"
+        "GSCI": "^SPGSCI",
+        "10Y": "^TNX",
+        "CPI": "CPIAUCSL"
     }
 
-    data = pd.DataFrame()
+    data = yf.download(list(tickers.values()), start="2000-01-01")["Adj Close"]
+    data.columns = tickers.keys()
 
-    for name, ticker in tickers.items():
-        df = yf.download(
-            ticker,
-            start=start,
-            end=end,
-            auto_adjust=True,
-            progress=False
-        )
-        if not df.empty:
-            data[name] = df["Close"]
+    # CPI monthly -> forward fill
+    data["CPI"] = data["CPI"].resample("D").ffill()
 
-    return data.ffill(limit=5)
+    return data.dropna()
 
-# -----------------------------------------------------------------------------
+df = load_data()
+
+# -------------------------------
 # INDICATORS
-# -----------------------------------------------------------------------------
+# -------------------------------
 
-def calculate_indicators(df):
+df["Copper_Gold"] = df["Copper"] / df["Gold"]
+df["Real_Yield"] = df["10Y"] - df["CPI"].pct_change(252)*100
+df["Momentum_6M"] = df["GSCI"].pct_change(126)
 
-    ind = pd.DataFrame(index=df.index)
+window = 756  # 3 years
 
-    if "Copper" in df and "Gold" in df:
-        ind["Copper_Gold"] = df["Copper"] / df["Gold"]
+for col in ["Copper_Gold", "Real_Yield", "DXY", "Momentum_6M"]:
+    df[f"{col}_z"] = (df[col] - df[col].rolling(window).mean()) / df[col].rolling(window).std()
 
-    if "US_10Y" in df and "US_2Y" in df:
-        ind["Yield_Curve"] = df["US_10Y"] - df["US_2Y"]
+df = df.dropna()
 
-    if "US_10Y" in df and "TIP" in df:
-        ind["Real_Yield_Proxy"] = df["US_10Y"] / df["TIP"]
+# -------------------------------
+# REGIME SCORE
+# -------------------------------
 
-    if "Commodity" in df and "SPX" in df:
-        ind["Commodity_vs_SPX"] = df["Commodity"] / df["SPX"]
+df["Score"] = (
+    (df["Real_Yield_z"] < 0).astype(int) +
+    (df["Copper_Gold_z"] > 0).astype(int) +
+    (df["DXY_z"] < 0).astype(int) +
+    (df["Momentum_6M_z"] > 0).astype(int)
+)
 
-    if "Commodity" in df:
-        ind["Momentum_6M"] = df["Commodity"].pct_change(126) * 100
+df["Prob"] = 1 / (1 + np.exp(-1.5*(df["Score"]-2)))
 
-    return ind
+latest = df.iloc[-1]
 
-# -----------------------------------------------------------------------------
-# REGIME LOGIC
-# -----------------------------------------------------------------------------
-
-def identify_regime(data, ind):
-
-    if len(data) < 126:
-        return "N/A"
-
-    momentum = ind["Momentum_6M"].iloc[-1]
-    real_yield = ind["Real_Yield_Proxy"].pct_change(63).iloc[-1]
-    copper_gold = ind["Copper_Gold"].pct_change(63).iloc[-1]
-
-    if real_yield < 0 and copper_gold > 0:
-        return "🚀 Expansion"
-
-    if momentum > 15 and real_yield < 0:
-        return "🔥 Commodity Boom"
-
-    if real_yield > 0 and data["DXY"].pct_change(63).iloc[-1] > 0:
-        return "📉 Contraction"
-
-    return "⚖️ Consolidation"
-
-# -----------------------------------------------------------------------------
-# LOAD
-# -----------------------------------------------------------------------------
-
-data = load_data(start_date, end_date, main_commodity)
-indicators = calculate_indicators(data)
-
-# -----------------------------------------------------------------------------
-# KPI
-# -----------------------------------------------------------------------------
-
-st.header("Situazione Attuale")
+# -------------------------------
+# METRICS
+# -------------------------------
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.metric("Regime", identify_regime(data, indicators))
+col1.metric("Regime Score", int(latest["Score"]))
+col2.metric("Supercycle Probability", f"{latest['Prob']*100:.1f}%")
 
-with col2:
-    if "Commodity" in data:
-        st.metric("Commodity", f"{data['Commodity'].iloc[-1]:.2f}")
+if latest["Score"] <= 1:
+    regime_label = "Bear Regime"
+elif latest["Score"] == 2:
+    regime_label = "Transition"
+else:
+    regime_label = "Supercycle"
 
-with col3:
-    if "Yield_Curve" in indicators:
-        st.metric("Yield Curve", f"{indicators['Yield_Curve'].iloc[-1]:.2f}")
+col3.metric("Current Regime", regime_label)
 
-# -----------------------------------------------------------------------------
-# CHART
-# -----------------------------------------------------------------------------
-
-st.subheader("Performance Normalizzata")
-
-norm = data.dropna()
-norm = (norm / norm.iloc[0]) * 100
+# -------------------------------
+# PROBABILITY CHART
+# -------------------------------
 
 fig = go.Figure()
-for col in norm.columns:
-    fig.add_trace(go.Scatter(x=norm.index, y=norm[col], name=col))
-
+fig.add_trace(go.Scatter(
+    x=df.index,
+    y=df["Prob"],
+    name="Supercycle Probability"
+))
+fig.update_layout(title="Supercycle Probability Over Time")
 st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# CORRELATIONS
-# -----------------------------------------------------------------------------
+# -------------------------------
+# Z-SCORE CHART
+# -------------------------------
 
-st.subheader("Correlation Matrix")
-corr = data.dropna().corr()
+fig2 = go.Figure()
+for col in ["Real_Yield_z", "Copper_Gold_z", "DXY_z", "Momentum_6M_z"]:
+    fig2.add_trace(go.Scatter(x=df.index, y=df[col], name=col))
 
-fig = px.imshow(corr, text_auto=".2f", zmin=-1, zmax=1)
-st.plotly_chart(fig, use_container_width=True)
+fig2.update_layout(title="Macro Z-Scores")
+st.plotly_chart(fig2, use_container_width=True)
