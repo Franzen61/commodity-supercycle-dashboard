@@ -200,23 +200,23 @@ available_indicators = []
 
 if "Real_Yield_z" in df.columns:
     binary_components.append((df["Real_Yield_z"] < 0).astype(int))
-    available_indicators.append("Real Yield Favorable (negative)")
+    available_indicators.append("Real Yield")
     
 if "Copper_Gold_z" in df.columns:
     binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
-    available_indicators.append("Copper/Gold Strong")
+    available_indicators.append("Copper/Gold")
 
 if "Oil_Gold_z" in df.columns:
     binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
-    available_indicators.append("Oil/Gold Strong")
+    available_indicators.append("Oil/Gold")
     
 if "DXY_z" in df.columns:
     binary_components.append((df["DXY_z"] < 0).astype(int))
-    available_indicators.append("Dollar Weak")
+    available_indicators.append("Dollar")
     
 if "Momentum_6M_z" in df.columns:
     binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
-    available_indicators.append("Momentum Positive")
+    available_indicators.append("Momentum")
 
 if len(binary_components) > 0:
     df["Score_Binary"] = sum(binary_components)
