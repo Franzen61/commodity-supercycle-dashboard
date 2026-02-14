@@ -9,61 +9,107 @@ st.set_page_config(layout="wide")
 st.title("📊 Commodity Supercycle Regime Model")
 
 # -------------------------------
+# CONFIGURAZIONE
+# -------------------------------
+
+# Sidebar per parametri
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    data_frequency = st.selectbox(
+        "Data Frequency",
+        ["Weekly", "Monthly"],
+        index=0
+    )
+    
+    years_back = st.slider("Years of History", 10, 25, 20)
+    
+    # Parametro Real Yield
+    st.subheader("Real Yield Calculation")
+    inflation_assumption = st.number_input(
+        "Assumed Breakeven Inflation (%)",
+        min_value=0.0,
+        max_value=5.0,
+        value=2.3,
+        step=0.1,
+        help="Current 10Y breakeven inflation from FRED is ~2.3%. Adjust if needed."
+    )
+    
+    st.info("💡 Weekly data reduces noise for long-term cycle analysis")
+
+# -------------------------------
 # DATA DOWNLOAD
 # -------------------------------
 @st.cache_data(ttl=3600)
-def load_data():
+def load_data(years, frequency, inflation_rate):
     """
-    Scarica dati storici.
-    NOTA: CPI non è disponibile su Yahoo Finance - usiamo un proxy
+    Scarica dati storici e resample a frequenza scelta
     """
+    start_date = (datetime.now() - pd.DateOffset(years=years)).strftime('%Y-%m-%d')
+    
     tickers = {
         "Copper": "HG=F",
         "Gold": "GC=F",
         "DXY": "DX-Y.NYB",
         "GSCI": "^SPGSCI",
         "US_10Y": "^TNX",
-        "TIP": "TIP"  # TIPS ETF come proxy per real yield
     }
     
     data = pd.DataFrame()
     
-    with st.spinner("Downloading data from Yahoo Finance..."):
-        for name, ticker in tickers.items():
-            try:
-                df = yf.download(ticker, start="2000-01-01", end=datetime.now().strftime('%Y-%m-%d'), progress=False)
-                
-                if df.empty:
-                    st.warning(f"⚠️ No data for {name} ({ticker})")
-                    continue
-                
-                # Usa Close se disponibile
-                if "Close" in df.columns:
-                    data[name] = df["Close"]
-                elif "Adj Close" in df.columns:
-                    data[name] = df["Adj Close"]
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Error downloading {name}: {str(e)}")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, (name, ticker) in enumerate(tickers.items()):
+        try:
+            status_text.text(f"Downloading {name}...")
+            df = yf.download(ticker, start=start_date, end=datetime.now().strftime('%Y-%m-%d'), progress=False)
+            
+            if df.empty:
+                st.warning(f"⚠️ No data for {name}")
                 continue
+            
+            if "Close" in df.columns:
+                data[name] = df["Close"]
+            elif "Adj Close" in df.columns:
+                data[name] = df["Adj Close"]
+                
+            progress_bar.progress((idx + 1) / len(tickers))
+            
+        except Exception as e:
+            st.warning(f"⚠️ Error downloading {name}: {str(e)}")
+            continue
     
-    # Forward fill per gap piccoli
-    data = data.fillna(method='ffill', limit=5)
+    progress_bar.empty()
+    status_text.empty()
     
-    # Rimuovi righe con troppi NaN
+    # Resample to weekly or monthly
+    if frequency == "Weekly":
+        data = data.resample('W').last()
+    else:  # Monthly
+        data = data.resample('M').last()
+    
+    # Forward fill piccoli gap
+    data = data.fillna(method='ffill', limit=2)
+    
+    # Rimuovi righe con troppi missing
     data = data.dropna(thresh=len(data.columns)*0.6)
+    
+    # Calcola Real Yield usando l'assunzione di inflazione
+    if "US_10Y" in data.columns:
+        data["Real_Yield"] = data["US_10Y"] - inflation_rate
     
     return data
 
 # Carica dati
 try:
-    df = load_data()
+    df = load_data(years_back, data_frequency, inflation_assumption)
     
     if df.empty:
         st.error("❌ Unable to download data. Please try again later.")
         st.stop()
     
-    st.success(f"✅ Data loaded: {len(df)} days")
+    st.success(f"✅ Data loaded: {len(df)} {data_frequency.lower()} periods ({df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')})")
     
 except Exception as e:
     st.error(f"❌ Error loading data: {str(e)}")
@@ -80,54 +126,38 @@ else:
     st.warning("⚠️ Copper or Gold data missing")
     df["Copper_Gold"] = 0
 
-# Real Yield Proxy
-# Invece di usare CPI (non disponibile su YF), usiamo un approccio semplificato
-if "US_10Y" in df.columns and "TIP" in df.columns:
-    # TIP riflette già l'inflation protection
-    # Real Yield approssimato = 10Y nominal - inflation expectation
-    # Usiamo il cambio % di TIP come proxy dell'inflation expectation
-    inflation_proxy = df["TIP"].pct_change(252) * 100  # YoY change
-    df["Real_Yield"] = df["US_10Y"] - inflation_proxy.rolling(21).mean()
-elif "US_10Y" in df.columns:
-    # Fallback: assumiamo 2% inflation target
-    df["Real_Yield"] = df["US_10Y"] - 2.0
-else:
-    st.warning("⚠️ 10Y Treasury data missing")
-    df["Real_Yield"] = 0
-
-# Momentum 6 mesi
+# Momentum
 if "GSCI" in df.columns:
-    df["Momentum_6M"] = df["GSCI"].pct_change(126) * 100  # 6 mesi in percentuale
+    # Per weekly: 26 settimane = 6 mesi
+    # Per monthly: 6 mesi
+    momentum_periods = 26 if data_frequency == "Weekly" else 6
+    df["Momentum_6M"] = df["GSCI"].pct_change(momentum_periods) * 100
 else:
     st.warning("⚠️ GSCI data missing")
     df["Momentum_6M"] = 0
 
-# Rimuovi NaN generati dai calcoli
+# Rimuovi NaN
 df = df.dropna(subset=["Copper_Gold", "Real_Yield", "Momentum_6M"])
 
 if df.empty:
     st.error("❌ Not enough data after calculations")
     st.stop()
 
-# Z-scores
-window = 756  # 3 anni
+# Z-scores (3 anni = 156 settimane o 36 mesi)
+if data_frequency == "Weekly":
+    window = 156  # 3 anni
+else:
+    window = 36
 
-indicators_to_normalize = []
-if "Copper_Gold" in df.columns:
-    indicators_to_normalize.append("Copper_Gold")
-if "Real_Yield" in df.columns:
-    indicators_to_normalize.append("Real_Yield")
-if "DXY" in df.columns:
-    indicators_to_normalize.append("DXY")
-if "Momentum_6M" in df.columns:
-    indicators_to_normalize.append("Momentum_6M")
+indicators = ["Copper_Gold", "Real_Yield", "DXY", "Momentum_6M"]
 
-for col in indicators_to_normalize:
-    mean = df[col].rolling(window).mean()
-    std = df[col].rolling(window).std()
-    df[f"{col}_z"] = (df[col] - mean) / std
+for col in indicators:
+    if col in df.columns:
+        mean = df[col].rolling(window).mean()
+        std = df[col].rolling(window).std()
+        df[f"{col}_z"] = (df[col] - mean) / std
 
-# Rimuovi NaN da rolling windows
+# Rimuovi NaN da rolling
 df = df.dropna()
 
 if df.empty:
@@ -138,34 +168,36 @@ if df.empty:
 # REGIME SCORE
 # -------------------------------
 
-# Calcola score solo se abbiamo tutti gli indicatori
 score_components = []
+available_indicators = []
 
 if "Real_Yield_z" in df.columns:
     score_components.append((df["Real_Yield_z"] < 0).astype(int))
+    available_indicators.append("Real Yield < 0")
     
 if "Copper_Gold_z" in df.columns:
     score_components.append((df["Copper_Gold_z"] > 0).astype(int))
+    available_indicators.append("Copper/Gold > 0")
     
 if "DXY_z" in df.columns:
     score_components.append((df["DXY_z"] < 0).astype(int))
+    available_indicators.append("Dollar < 0")
     
 if "Momentum_6M_z" in df.columns:
     score_components.append((df["Momentum_6M_z"] > 0).astype(int))
+    available_indicators.append("Momentum > 0")
 
 if len(score_components) > 0:
     df["Score"] = sum(score_components)
-    # Normalizza score in base al numero di componenti disponibili
     max_score = len(score_components)
-    df["Score_Normalized"] = df["Score"] / max_score * 4  # Scala a 0-4
+    df["Score_Normalized"] = df["Score"] / max_score * 4
 else:
     st.error("❌ Unable to calculate regime score")
     st.stop()
 
-# Probabilità superciclo (sigmoid function)
+# Probability
 df["Prob"] = 1 / (1 + np.exp(-1.5 * (df["Score_Normalized"] - 2)))
 
-# Latest values
 latest = df.iloc[-1]
 
 # -------------------------------
@@ -175,10 +207,10 @@ latest = df.iloc[-1]
 st.markdown("---")
 st.subheader("📈 Current Market Regime")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
-    st.metric("Regime Score", f"{latest['Score']}/{max_score}")
+    st.metric("Regime Score", f"{int(latest['Score'])}/{max_score}")
 
 with col2:
     prob_value = latest['Prob'] * 100
@@ -186,143 +218,238 @@ with col2:
 
 with col3:
     if latest["Score_Normalized"] <= 1.5:
-        regime_label = "🐻 Bear Regime"
-        regime_color = "red"
+        regime_label = "🐻 Bear"
     elif latest["Score_Normalized"] <= 2.5:
         regime_label = "⚖️ Transition"
-        regime_color = "orange"
     else:
         regime_label = "🚀 Supercycle"
-        regime_color = "green"
-    
-    st.metric("Current Regime", regime_label)
+    st.metric("Regime", regime_label)
 
 with col4:
-    # Trend (confronto con 1 mese fa)
-    if len(df) > 21:
-        prob_change = (latest["Prob"] - df.iloc[-21]["Prob"]) * 100
-        st.metric("1M Change", f"{prob_change:+.1f}pp")
+    # Real Yield attuale
+    st.metric("Real Yield", f"{latest['Real_Yield']:.2f}%")
+
+with col5:
+    # Copper/Gold
+    if "Copper_Gold" in df.columns:
+        st.metric("Cu/Au Ratio", f"{latest['Copper_Gold']:.4f}")
+
+# Indicatori attivi
+st.markdown(f"**Active Signals ({int(latest['Score'])}/{max_score}):** " + " | ".join([
+    f"✅ {ind}" if score_components[i].iloc[-1] == 1 else f"❌ {ind}" 
+    for i, ind in enumerate(available_indicators)
+]))
 
 st.markdown("---")
 
 # -------------------------------
-# PROBABILITY CHART
+# TABS PER GRAFICI
 # -------------------------------
 
-st.subheader("🎯 Supercycle Probability Over Time")
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Probability", "📈 Z-Scores", "💹 Raw Data", "ℹ️ Methodology"])
 
-fig = go.Figure()
-
-# Probability line
-fig.add_trace(go.Scatter(
-    x=df.index,
-    y=df["Prob"] * 100,
-    name="Supercycle Probability",
-    line=dict(color='blue', width=2),
-    fill='tozeroy',
-    fillcolor='rgba(0,100,255,0.2)'
-))
-
-# Threshold lines
-fig.add_hline(y=50, line_dash="dash", line_color="gray", 
-              annotation_text="50% Threshold")
-fig.add_hline(y=75, line_dash="dash", line_color="green", 
-              annotation_text="High Probability")
-fig.add_hline(y=25, line_dash="dash", line_color="red", 
-              annotation_text="Low Probability")
-
-fig.update_layout(
-    title="Supercycle Probability Evolution",
-    yaxis_title="Probability (%)",
-    xaxis_title="Date",
-    hovermode='x unified',
-    height=500
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# -------------------------------
-# Z-SCORE CHART
-# -------------------------------
-
-st.subheader("📊 Macro Indicators (Z-Scores)")
-
-fig2 = go.Figure()
-
-z_score_cols = [col for col in df.columns if col.endswith('_z')]
-
-colors = ['red', 'green', 'blue', 'orange', 'purple']
-
-for idx, col in enumerate(z_score_cols):
-    fig2.add_trace(go.Scatter(
-        x=df.index, 
-        y=df[col], 
-        name=col.replace('_z', ''),
-        line=dict(color=colors[idx % len(colors)])
+with tab1:
+    st.subheader("🎯 Supercycle Probability Over Time")
+    
+    fig = go.Figure()
+    
+    # Probability
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df["Prob"] * 100,
+        name="Supercycle Probability",
+        line=dict(color='blue', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(0,100,255,0.2)'
     ))
+    
+    # Threshold lines
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", annotation_text="Neutral (50%)")
+    fig.add_hline(y=75, line_dash="dot", line_color="green", annotation_text="Strong Signal (75%)")
+    fig.add_hline(y=25, line_dash="dot", line_color="red", annotation_text="Weak Signal (25%)")
+    
+    # Regime zones
+    fig.add_hrect(y0=0, y1=25, fillcolor="red", opacity=0.05, annotation_text="Bear Zone")
+    fig.add_hrect(y0=75, y1=100, fillcolor="green", opacity=0.05, annotation_text="Bull Zone")
+    
+    fig.update_layout(
+        yaxis_title="Probability (%)",
+        xaxis_title="Date",
+        hovermode='x unified',
+        height=600
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Historical stats
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        bear_pct = (df["Prob"] < 0.25).sum() / len(df) * 100
+        st.metric("Time in Bear Regime", f"{bear_pct:.1f}%")
+    
+    with col2:
+        transition_pct = ((df["Prob"] >= 0.25) & (df["Prob"] <= 0.75)).sum() / len(df) * 100
+        st.metric("Time in Transition", f"{transition_pct:.1f}%")
+    
+    with col3:
+        bull_pct = (df["Prob"] > 0.75).sum() / len(df) * 100
+        st.metric("Time in Supercycle", f"{bull_pct:.1f}%")
 
-# Zero line
-fig2.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+with tab2:
+    st.subheader("📊 Macro Indicators (Z-Scores)")
+    
+    fig2 = go.Figure()
+    
+    z_cols = [col for col in df.columns if col.endswith('_z')]
+    colors = ['red', 'green', 'blue', 'orange']
+    
+    for idx, col in enumerate(z_cols):
+        fig2.add_trace(go.Scatter(
+            x=df.index,
+            y=df[col],
+            name=col.replace('_z', '').replace('_', ' '),
+            line=dict(color=colors[idx % len(colors)], width=2)
+        ))
+    
+    # Reference lines
+    fig2.add_hline(y=0, line_dash="solid", line_color="black", opacity=0.3)
+    fig2.add_hrect(y0=-1, y1=1, fillcolor="gray", opacity=0.1, annotation_text="±1σ")
+    fig2.add_hrect(y0=-2, y1=-1, fillcolor="red", opacity=0.05)
+    fig2.add_hrect(y0=1, y1=2, fillcolor="green", opacity=0.05)
+    
+    fig2.update_layout(
+        yaxis_title="Z-Score (Standard Deviations)",
+        xaxis_title="Date",
+        hovermode='x unified',
+        height=600
+    )
+    
+    st.plotly_chart(fig2, use_container_width=True)
 
-# +/- 1 sigma zones
-fig2.add_hrect(y0=-1, y1=1, fillcolor="gray", opacity=0.1, 
-               annotation_text="±1σ", annotation_position="right")
-
-fig2.update_layout(
-    title="Normalized Macro Indicators (3-Year Rolling Z-Scores)",
-    yaxis_title="Z-Score",
-    xaxis_title="Date",
-    hovermode='x unified',
-    height=500
-)
-
-st.plotly_chart(fig2, use_container_width=True)
-
-# -------------------------------
-# DATA TABLE
-# -------------------------------
-
-with st.expander("📋 View Latest Data"):
+with tab3:
+    st.subheader("💹 Raw Indicators")
+    
+    # Plot raw values
+    fig3 = go.Figure()
+    
+    raw_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M"]
+    
+    for col in raw_cols:
+        if col in df.columns:
+            fig3.add_trace(go.Scatter(
+                x=df.index,
+                y=df[col],
+                name=col.replace('_', ' '),
+                yaxis='y' if col == raw_cols[0] else 'y2'
+            ))
+    
+    fig3.update_layout(
+        yaxis=dict(title="Primary Axis"),
+        yaxis2=dict(title="Secondary Axis", overlaying='y', side='right'),
+        hovermode='x unified',
+        height=600
+    )
+    
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    # Data table
+    st.subheader("📋 Latest Data")
+    display_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M", "Score", "Prob"]
     st.dataframe(
-        df[[col for col in df.columns if not col.endswith('_z')]].tail(20).style.format("{:.2f}"),
+        df[[col for col in display_cols if col in df.columns]].tail(20).style.format("{:.2f}"),
         use_container_width=True
     )
 
-# -------------------------------
-# METHODOLOGY
-# -------------------------------
-
-with st.expander("ℹ️ Methodology"):
-    st.markdown("""
-    ### Regime Score Calculation
+with tab4:
+    st.markdown(f"""
+    ### 📊 Methodology
     
-    The regime score is based on 4 key macro indicators:
+    #### Data Frequency
+    - **Current Setting**: {data_frequency}
+    - Long-term cycle analysis benefits from lower frequency data to reduce noise
     
-    1. **Real Yield** (Z-score < 0) → Negative real yields favor commodities
-    2. **Copper/Gold Ratio** (Z-score > 0) → Rising ratio indicates economic strength
-    3. **Dollar Index** (Z-score < 0) → Weak dollar supports commodity prices
-    4. **6-Month Momentum** (Z-score > 0) → Positive momentum signals trend strength
+    #### Real Yield Calculation
     
-    Each condition = +1 point → Score range: 0-4
+    **Current Method:**
+    ```
+    Real Yield = US 10Y Treasury Yield - Assumed Breakeven Inflation
+    ```
     
-    ### Probability Function
+    - **US 10Y**: ^TNX from Yahoo Finance
+    - **Breakeven Inflation**: {inflation_assumption}% (adjustable in sidebar)
+    - **Note**: Official FRED DFII10 provides actual TIPS yield (~1.8% currently)
     
-    Supercycle Probability = 1 / (1 + e^(-1.5 × (Score - 2)))
+    ⚠️ **Limitation**: This is an approximation. For precise Real Yield, use FRED data (DFII10 or T10YIE).
     
-    - **Score 0-1**: Bear regime (Low probability)
-    - **Score 2**: Transition (50% probability)
-    - **Score 3-4**: Supercycle (High probability)
+    #### Regime Score Components
     
-    ### Data Sources
+    Each indicator contributes +1 to score when condition is met:
     
-    - Yahoo Finance (daily data)
-    - 3-year rolling window for z-score normalization
-    - Forward-fill for missing data (max 5 days)
+    1. **Real Yield** (Z-score < 0) 
+       - Negative real yields = supportive for commodities
+       
+    2. **Copper/Gold Ratio** (Z-score > 0)
+       - Rising ratio = economic growth signal
+       
+    3. **Dollar Index** (Z-score < 0)
+       - Weak dollar = positive for commodity prices
+       
+    4. **6-Month Momentum** (Z-score > 0)
+       - Positive momentum = trend strength
+    
+    **Total Score**: 0-4
+    
+    #### Z-Score Normalization
+    
+    - **Window**: 3 years ({window} periods)
+    - **Formula**: (Value - Rolling Mean) / Rolling StdDev
+    - **Purpose**: Normalize different indicators to comparable scale
+    
+    #### Probability Function
+    
+    ```
+    P(Supercycle) = 1 / (1 + e^(-1.5 × (Score - 2)))
+    ```
+    
+    - **Score 0-1**: Bear regime (P < 25%)
+    - **Score 2**: Neutral (P ≈ 50%)
+    - **Score 3-4**: Supercycle (P > 75%)
+    
+    #### Data Sources
+    
+    - **Yahoo Finance**: Commodity prices, yields, dollar index
+    - **Frequency**: {data_frequency} ({len(df)} periods)
+    - **History**: {years_back} years
+    
+    #### Improvements Needed
+    
+    - [ ] Integrate FRED API for accurate Real Yield (DFII10 or T10YIE)
+    - [ ] Add oil prices as additional indicator
+    - [ ] Historical backtest performance metrics
     """)
 
 st.markdown("---")
+
+# Footer
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("**Current Real Yield Assumption**")
+    st.info(f"{inflation_assumption}% breakeven inflation")
+
+with col2:
+    st.markdown("**Data Quality**")
+    data_completeness = (1 - df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100
+    st.success(f"{data_completeness:.1f}% complete")
+
+with col3:
+    st.markdown("**Last Update**")
+    st.info(f"{df.index[-1].strftime('%Y-%m-%d')}")
+
 st.markdown("""
-<div style='text-align: center; color: gray;'>
-    <p>📊 Commodity Supercycle Dashboard | Data from Yahoo Finance | Updates every hour</p>
+<div style='text-align: center; color: gray; margin-top: 20px;'>
+    <p>📊 Commodity Supercycle Dashboard v2.0 | Yahoo Finance Data | {frequency} Updates</p>
+    <p style='font-size: 0.8em;'>⚠️ For production use, integrate FRED API for accurate Real Yield calculation</p>
 </div>
-""", unsafe_allow_html=True)
+""".format(frequency=data_frequency), unsafe_allow_html=True)
