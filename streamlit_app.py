@@ -498,14 +498,23 @@ with tab2:
     fig2 = go.Figure()
     
     z_cols = [col for col in df.columns if col.endswith('_z')]
-    colors = ['red', 'green', 'blue', 'orange']
     
-    for idx, col in enumerate(z_cols):
+    # Mappa colori specifica per ogni indicatore
+    color_map = {
+        'Real_Yield_z': '#DC143C',      # Crimson red
+        'Copper_Gold_z': '#1E90FF',     # Dodger blue
+        'Oil_Gold_z': '#FF8C00',        # Dark orange
+        'DXY_z': '#9370DB',             # Medium purple
+        'Momentum_6M_z': '#00FF00'      # Lime green (verde acido brillante!)
+    }
+    
+    for col in z_cols:
+        color = color_map.get(col, '#808080')  # Grigio come fallback
         fig2.add_trace(go.Scatter(
             x=df.index,
             y=df[col],
             name=col.replace('_z', '').replace('_', ' '),
-            line=dict(color=colors[idx % len(colors)], width=2)
+            line=dict(color=color, width=2)
         ))
     
     # Reference lines
