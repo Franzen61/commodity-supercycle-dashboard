@@ -40,9 +40,12 @@ def load_data():
         data[name] = series
 
     # CPI è mensile → trasformiamo in giornaliero
-    data["CPI"] = data["CPI"].resample("D").ffill()
+    data = data.resample("D").ffill()
 
-    return data.dropna()
+    # eliminiamo solo righe completamente vuote
+    data = data.dropna(how="all")
+
+    return data
 
 df = load_data()
 
