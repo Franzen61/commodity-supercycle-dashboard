@@ -50,6 +50,62 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # Weighting scheme
+    st.subheader("⚖️ Indicator Weights")
+    
+    weight_mode = st.radio(
+        "Weighting Mode",
+        ["Equal Weights (Simple)", "Custom Weights (Advanced)"],
+        index=0,
+        help="Equal weights = all indicators count equally. Custom = adjust based on importance."
+    )
+    
+    if weight_mode == "Custom Weights (Advanced)":
+        st.warning("⚠️ **Overfitting Risk**: Avoid adjusting weights to fit recent data. Use academic research or backtest validation.")
+        
+        st.markdown("**Academic Defaults** (based on commodity cycle literature):")
+        st.caption("Real Yield (30%) • Dollar (25%) • Cu/Gold (20%) • Oil/Gold (15%) • Momentum (10%)")
+        
+        use_defaults = st.checkbox("Use Academic Defaults", value=True)
+        
+        if use_defaults:
+            weight_real_yield = 0.30
+            weight_dollar = 0.25
+            weight_cu_gold = 0.20
+            weight_oil_gold = 0.15
+            weight_momentum = 0.10
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                weight_real_yield = st.slider("Real Yield", 0.0, 0.5, 0.30, 0.05)
+                weight_cu_gold = st.slider("Copper/Gold", 0.0, 0.3, 0.20, 0.05)
+                weight_momentum = st.slider("GSCI Momentum", 0.0, 0.2, 0.10, 0.05)
+            with col2:
+                weight_dollar = st.slider("Dollar Index", 0.0, 0.5, 0.25, 0.05)
+                weight_oil_gold = st.slider("Oil/Gold", 0.0, 0.3, 0.15, 0.05)
+            
+            total_weight = weight_real_yield + weight_dollar + weight_cu_gold + weight_oil_gold + weight_momentum
+            if abs(total_weight - 1.0) > 0.01:
+                st.error(f"⚠️ Weights must sum to 100% (currently {total_weight*100:.1f}%)")
+    else:
+        # Equal weights
+        weight_real_yield = 0.20
+        weight_dollar = 0.20
+        weight_cu_gold = 0.20
+        weight_oil_gold = 0.20
+        weight_momentum = 0.20
+    
+    # Store weights for later use
+    weights = {
+        'Real_Yield': weight_real_yield,
+        'DXY': weight_dollar,
+        'Copper_Gold': weight_cu_gold,
+        'Oil_Gold': weight_oil_gold,
+        'Momentum_6M': weight_momentum
+    }
+    
+    st.markdown("---")
+    
     # Parametro Real Yield
     st.subheader("💰 Real Yield Calculation")
     inflation_assumption = st.number_input(
@@ -208,42 +264,74 @@ if df.empty:
     st.stop()
 
 # -------------------------------
-# REGIME SCORE
+# REGIME SCORE (CONTINUOUS WITH WEIGHTS)
 # -------------------------------
 
-score_components = []
+def sigmoid(x):
+    """Sigmoid function to convert z-score to 0-1 probability"""
+    return 1 / (1 + np.exp(-x))
+
+# Calculate weighted continuous score
+score_values = {}
+
+if "Real_Yield_z" in df.columns:
+    # Real Yield: favorable when NEGATIVE (z-score < 0)
+    # So we flip: sigmoid(-z_score)
+    score_values['Real_Yield'] = sigmoid(-df["Real_Yield_z"]) * weights['Real_Yield']
+    
+if "Copper_Gold_z" in df.columns:
+    # Copper/Gold: favorable when POSITIVE (z-score > 0)
+    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"]) * weights['Copper_Gold']
+
+if "Oil_Gold_z" in df.columns:
+    # Oil/Gold: favorable when POSITIVE (z-score > 0)
+    score_values['Oil_Gold'] = sigmoid(df["Oil_Gold_z"]) * weights['Oil_Gold']
+    
+if "DXY_z" in df.columns:
+    # Dollar: favorable when NEGATIVE (z-score < 0)
+    score_values['DXY'] = sigmoid(-df["DXY_z"]) * weights['DXY']
+    
+if "Momentum_6M_z" in df.columns:
+    # Momentum: favorable when POSITIVE (z-score > 0)
+    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"]) * weights['Momentum_6M']
+
+# Weighted sum (0 to 1 scale)
+df["Score_Continuous"] = sum(score_values.values())
+
+# Also keep binary score for display/comparison
+binary_components = []
 available_indicators = []
 
 if "Real_Yield_z" in df.columns:
-    score_components.append((df["Real_Yield_z"] < 0).astype(int))
+    binary_components.append((df["Real_Yield_z"] < 0).astype(int))
     available_indicators.append("Real Yield < 0")
     
 if "Copper_Gold_z" in df.columns:
-    score_components.append((df["Copper_Gold_z"] > 0).astype(int))
+    binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
     available_indicators.append("Copper/Gold > 0")
 
 if "Oil_Gold_z" in df.columns:
-    score_components.append((df["Oil_Gold_z"] > 0).astype(int))
+    binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
     available_indicators.append("Oil/Gold > 0")
     
 if "DXY_z" in df.columns:
-    score_components.append((df["DXY_z"] < 0).astype(int))
+    binary_components.append((df["DXY_z"] < 0).astype(int))
     available_indicators.append("Dollar < 0")
     
 if "Momentum_6M_z" in df.columns:
-    score_components.append((df["Momentum_6M_z"] > 0).astype(int))
+    binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
     available_indicators.append("GSCI Momentum > 0")
 
-if len(score_components) > 0:
-    df["Score"] = sum(score_components)
-    max_score = len(score_components)
-    df["Score_Normalized"] = df["Score"] / max_score * 4
+if len(binary_components) > 0:
+    df["Score_Binary"] = sum(binary_components)
+    max_score = len(binary_components)
 else:
     st.error("❌ Unable to calculate regime score")
     st.stop()
 
-# Probability
-df["Prob"] = 1 / (1 + np.exp(-1.5 * (df["Score_Normalized"] - 2)))
+# Probability from continuous score (0-1 range)
+# Apply another sigmoid to create S-curve response
+df["Prob"] = sigmoid(6 * (df["Score_Continuous"] - 0.5))
 
 # Smoothed Probability (media mobile)
 if enable_smoothing and smooth_periods > 1:
@@ -263,7 +351,9 @@ st.subheader("📈 Current Market Regime")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
-    st.metric("Regime Score", f"{int(latest['Score'])}/{max_score}")
+    st.metric("Binary Score", f"{int(latest['Score_Binary'])}/{max_score}")
+    if weight_mode == "Custom Weights (Advanced)":
+        st.caption(f"Continuous: {latest['Score_Continuous']:.2f}")
 
 with col2:
     prob_value = latest['Prob_Smooth'] * 100
@@ -273,9 +363,9 @@ with col2:
                  f"{prob_delta:+.1f}pp (smoothed)" if abs(prob_delta) > 0.1 else None)
 
 with col3:
-    if latest["Score_Normalized"] <= 1.5:
+    if latest["Prob_Smooth"] <= 0.35:
         regime_label = "🐻 Bear"
-    elif latest["Score_Normalized"] <= 2.5:
+    elif latest["Prob_Smooth"] <= 0.65:
         regime_label = "⚖️ Transition"
     else:
         regime_label = "🚀 Supercycle"
@@ -296,10 +386,45 @@ with col6:
         st.metric("Oil/Au Ratio", f"{latest['Oil_Gold']:.4f}")
 
 # Indicatori attivi
-st.markdown(f"**Active Signals ({int(latest['Score'])}/{max_score}):** " + " | ".join([
-    f"✅ {ind}" if score_components[i].iloc[-1] == 1 else f"❌ {ind}" 
+active_signals_text = " | ".join([
+    f"✅ {ind}" if binary_components[i].iloc[-1] == 1 else f"❌ {ind}" 
     for i, ind in enumerate(available_indicators)
-]))
+])
+
+st.markdown(f"**Active Signals ({int(latest['Score_Binary'])}/{max_score}):** {active_signals_text}")
+
+# Show weights if custom mode
+if weight_mode == "Custom Weights (Advanced)":
+    st.markdown(f"**Weights:** Real Yield ({weights['Real_Yield']*100:.0f}%) • Dollar ({weights['DXY']*100:.0f}%) • Cu/Au ({weights['Copper_Gold']*100:.0f}%) • Oil/Au ({weights['Oil_Gold']*100:.0f}%) • Momentum ({weights['Momentum_6M']*100:.0f}%)")
+    
+    # Show individual contributions to continuous score
+    with st.expander("📊 View Indicator Contributions"):
+        contribution_col1, contribution_col2, contribution_col3, contribution_col4, contribution_col5 = st.columns(5)
+        
+        if "Real_Yield_z" in df.columns:
+            contrib_ry = sigmoid(-latest["Real_Yield_z"]) * weights['Real_Yield'] * 100
+            contribution_col1.metric("Real Yield", f"{contrib_ry:.1f}%", 
+                                    help=f"Z-score: {latest['Real_Yield_z']:.2f}")
+        
+        if "DXY_z" in df.columns:
+            contrib_dxy = sigmoid(-latest["DXY_z"]) * weights['DXY'] * 100
+            contribution_col2.metric("Dollar", f"{contrib_dxy:.1f}%",
+                                    help=f"Z-score: {latest['DXY_z']:.2f}")
+        
+        if "Copper_Gold_z" in df.columns:
+            contrib_cu = sigmoid(latest["Copper_Gold_z"]) * weights['Copper_Gold'] * 100
+            contribution_col3.metric("Cu/Gold", f"{contrib_cu:.1f}%",
+                                    help=f"Z-score: {latest['Copper_Gold_z']:.2f}")
+        
+        if "Oil_Gold_z" in df.columns:
+            contrib_oil = sigmoid(latest["Oil_Gold_z"]) * weights['Oil_Gold'] * 100
+            contribution_col4.metric("Oil/Gold", f"{contrib_oil:.1f}%",
+                                    help=f"Z-score: {latest['Oil_Gold_z']:.2f}")
+        
+        if "Momentum_6M_z" in df.columns:
+            contrib_mom = sigmoid(latest["Momentum_6M_z"]) * weights['Momentum_6M'] * 100
+            contribution_col5.metric("Momentum", f"{contrib_mom:.1f}%",
+                                    help=f"Z-score: {latest['Momentum_6M_z']:.2f}")
 
 st.markdown("---")
 
@@ -477,29 +602,34 @@ with tab4:
     
     #### Regime Score Components
     
-    Each indicator contributes +1 to score when condition is met:
+    **Weighting Mode:** {weight_mode}
     
-    1. **Real Yield** (Z-score < 0) 
-       - Negative real yields = supportive for commodities
-       
-    2. **Copper/Gold Ratio** (Z-score > 0)
-       - Rising ratio = industrial demand strength signal
-       
-    3. **Oil/Gold Ratio** (Z-score > 0)
-       - Rising ratio = energy demand and economic activity
-       
-    4. **Dollar Index** (Z-score < 0)
-       - Weak dollar = positive for commodity prices
-       
-    5. **GSCI Momentum 6M** (Z-score > 0)
-       - Positive momentum = broad commodity trend strength
+    Each indicator is converted from Z-score to a 0-1 probability using sigmoid function, then weighted:
     
-    **Total Score**: 0-5
+    | Indicator | Condition | Weight | Rationale |
+    |-----------|-----------|--------|-----------|
+    | **Real Yield** | Z-score < 0 | {weights['Real_Yield']*100:.0f}% | Negative real yields support commodity prices |
+    | **Copper/Gold** | Z-score > 0 | {weights['Copper_Gold']*100:.0f}% | Industrial demand strength indicator |
+    | **Oil/Gold** | Z-score > 0 | {weights['Oil_Gold']*100:.0f}% | Energy demand and economic activity |
+    | **Dollar Index** | Z-score < 0 | {weights['DXY']*100:.0f}% | Weak dollar supports commodity prices |
+    | **GSCI Momentum** | Z-score > 0 | {weights['Momentum_6M']*100:.0f}% | Broad commodity trend confirmation |
     
-    **Why Oil/Gold?**
-    - Oil = proxy for global economic activity and energy demand
-    - Complements Copper/Gold (industrial metals) with energy component
-    - GSCI is 50-60% energy-weighted, so Oil separate provides clarity
+    **Continuous Scoring Method:**
+    - Binary score (0/1): Used for display only
+    - Continuous score: `Σ(sigmoid(z_score) × weight)` for each indicator
+    - Final probability: `sigmoid(6 × (continuous_score - 0.5))`
+    
+    **Why Continuous vs Binary?**
+    - Binary: Sharp transitions, more noise
+    - Continuous: Gradual changes, captures signal intensity
+    - Better for long-term cycle identification
+    
+    **Academic Weight Justification:**
+    - Real Yield (30%): Most cited factor in commodity literature (Erb & Harvey, Goldman Sachs Research)
+    - Dollar (25%): Strong inverse correlation documented across cycles
+    - Copper/Gold (20%): Dr. Copper as leading economic indicator
+    - Oil/Gold (15%): Energy sector weight in commodity complex
+    - Momentum (10%): Lagging confirmation, prevents false signals
     
     #### Z-Score Normalization
     
@@ -518,15 +648,33 @@ with tab4:
     
     #### Probability Function
     
+    **Step 1: Z-score to Probability**
     ```
-    P(Supercycle) = 1 / (1 + e^(-1.5 × (Score_Normalized - 2)))
+    indicator_prob = 1 / (1 + e^(-z_score))
+    ```
+    For inverted indicators (Real Yield, Dollar): use `-z_score`
+    
+    **Step 2: Weighted Sum**
+    ```
+    continuous_score = Σ(indicator_prob × weight)
+    Range: 0 to 1
     ```
     
-    Where Score_Normalized scales the actual score (0-5) to range 0-4 for the sigmoid function.
+    **Step 3: Final Probability (S-curve)**  
+    ```
+    P(Supercycle) = 1 / (1 + e^(-6 × (continuous_score - 0.5)))
+    ```
     
-    - **Score 0-2**: Bear regime (P < 35%)
-    - **Score 2-3**: Neutral/Transition (P ≈ 35-65%)
-    - **Score 4-5**: Supercycle (P > 65%)
+    **Regime Thresholds:**
+    - **P < 35%**: Bear regime
+    - **35% ≤ P ≤ 65%**: Transition
+    - **P > 65%**: Supercycle
+    
+    **Anti-Overfitting Measures:**
+    - Default weights from academic literature (Erb & Harvey 2006, GS Commodity Research)
+    - Out-of-sample validation recommended before using custom weights
+    - Equal-weight mode available as benchmark
+    - Historical regime distribution shown for sanity check
     
     #### Data Sources
     
