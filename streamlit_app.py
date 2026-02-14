@@ -20,13 +20,38 @@ with st.sidebar:
     data_frequency = st.selectbox(
         "Data Frequency",
         ["Weekly", "Monthly"],
-        index=0
+        index=1  # Default to Monthly
     )
     
     years_back = st.slider("Years of History", 10, 25, 20)
     
+    st.markdown("---")
+    
+    # Z-score window
+    st.subheader("📊 Z-Score Settings")
+    zscore_years = st.selectbox(
+        "Z-Score Rolling Window",
+        [3, 5, 7],
+        index=1,  # Default 5 years
+        help="Longer window = smoother signals, better for long-term cycles"
+    )
+    
+    # Smoothing
+    st.subheader("🎨 Probability Smoothing")
+    enable_smoothing = st.checkbox("Enable Smoothing", value=True)
+    
+    if enable_smoothing:
+        if data_frequency == "Monthly":
+            smooth_periods = st.slider("Smoothing Window (months)", 3, 12, 6)
+        else:
+            smooth_periods = st.slider("Smoothing Window (weeks)", 4, 24, 12)
+    else:
+        smooth_periods = 1
+    
+    st.markdown("---")
+    
     # Parametro Real Yield
-    st.subheader("Real Yield Calculation")
+    st.subheader("💰 Real Yield Calculation")
     inflation_assumption = st.number_input(
         "Assumed Breakeven Inflation (%)",
         min_value=0.0,
@@ -36,13 +61,13 @@ with st.sidebar:
         help="Current 10Y breakeven inflation from FRED is ~2.3%. Adjust if needed."
     )
     
-    st.info("💡 Weekly data reduces noise for long-term cycle analysis")
+    st.info(f"💡 {data_frequency} data with {zscore_years}Y z-score window")
 
 # -------------------------------
 # DATA DOWNLOAD
 # -------------------------------
 @st.cache_data(ttl=3600)
-def load_data(years, frequency, inflation_rate):
+def load_data(years, frequency, inflation_rate, zscore_years):
     """
     Scarica dati storici e resample a frequenza scelta
     """
@@ -105,7 +130,7 @@ def load_data(years, frequency, inflation_rate):
 
 # Carica dati
 try:
-    df = load_data(years_back, data_frequency, inflation_assumption)
+    df = load_data(years_back, data_frequency, inflation_assumption, zscore_years)
     
     if df.empty:
         st.error("❌ Unable to download data. Please try again later.")
@@ -159,11 +184,13 @@ if df.empty:
     st.error("❌ Not enough data after calculations")
     st.stop()
 
-# Z-scores (3 anni = 156 settimane o 36 mesi)
+# Z-scores (configurabile: 3, 5 o 7 anni)
 if data_frequency == "Weekly":
-    window = 156  # 3 anni
+    window = zscore_years * 52  # anni * settimane
 else:
-    window = 36
+    window = zscore_years * 12  # anni * mesi
+
+st.sidebar.info(f"📊 Z-score window: {window} {data_frequency.lower()} periods ({zscore_years} years)")
 
 indicators = ["Copper_Gold", "Oil_Gold", "Real_Yield", "DXY", "Momentum_6M"]
 
@@ -218,6 +245,12 @@ else:
 # Probability
 df["Prob"] = 1 / (1 + np.exp(-1.5 * (df["Score_Normalized"] - 2)))
 
+# Smoothed Probability (media mobile)
+if enable_smoothing and smooth_periods > 1:
+    df["Prob_Smooth"] = df["Prob"].rolling(smooth_periods, min_periods=1).mean()
+else:
+    df["Prob_Smooth"] = df["Prob"]
+
 latest = df.iloc[-1]
 
 # -------------------------------
@@ -233,8 +266,11 @@ with col1:
     st.metric("Regime Score", f"{int(latest['Score'])}/{max_score}")
 
 with col2:
-    prob_value = latest['Prob'] * 100
-    st.metric("Supercycle Probability", f"{prob_value:.1f}%")
+    prob_value = latest['Prob_Smooth'] * 100
+    if enable_smoothing:
+        prob_delta = (latest['Prob_Smooth'] - latest['Prob']) * 100
+        st.metric("Supercycle Probability", f"{prob_value:.1f}%", 
+                 f"{prob_delta:+.1f}pp (smoothed)" if abs(prob_delta) > 0.1 else None)
 
 with col3:
     if latest["Score_Normalized"] <= 1.5:
@@ -278,11 +314,21 @@ with tab1:
     
     fig = go.Figure()
     
-    # Probability
+    # Raw Probability (sottile, semi-trasparente)
+    if enable_smoothing and smooth_periods > 1:
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df["Prob"] * 100,
+            name="Raw Probability",
+            line=dict(color='lightblue', width=1, dash='dot'),
+            opacity=0.5
+        ))
+    
+    # Smoothed Probability (principale)
     fig.add_trace(go.Scatter(
         x=df.index,
-        y=df["Prob"] * 100,
-        name="Supercycle Probability",
+        y=df["Prob_Smooth"] * 100,
+        name="Smoothed Probability" if enable_smoothing else "Probability",
         line=dict(color='blue', width=3),
         fill='tozeroy',
         fillcolor='rgba(0,100,255,0.2)'
@@ -306,19 +352,19 @@ with tab1:
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Historical stats
+    # Historical stats (usando smoothed)
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        bear_pct = (df["Prob"] < 0.25).sum() / len(df) * 100
+        bear_pct = (df["Prob_Smooth"] < 0.25).sum() / len(df) * 100
         st.metric("Time in Bear Regime", f"{bear_pct:.1f}%")
     
     with col2:
-        transition_pct = ((df["Prob"] >= 0.25) & (df["Prob"] <= 0.75)).sum() / len(df) * 100
+        transition_pct = ((df["Prob_Smooth"] >= 0.25) & (df["Prob_Smooth"] <= 0.75)).sum() / len(df) * 100
         st.metric("Time in Transition", f"{transition_pct:.1f}%")
     
     with col3:
-        bull_pct = (df["Prob"] > 0.75).sum() / len(df) * 100
+        bull_pct = (df["Prob_Smooth"] > 0.75).sum() / len(df) * 100
         st.metric("Time in Supercycle", f"{bull_pct:.1f}%")
 
 with tab2:
@@ -457,9 +503,18 @@ with tab4:
     
     #### Z-Score Normalization
     
-    - **Window**: 3 years ({window} periods)
+    - **Window**: Configurable ({zscore_years} years = {window} {data_frequency.lower()} periods)
     - **Formula**: (Value - Rolling Mean) / Rolling StdDev
     - **Purpose**: Normalize different indicators to comparable scale
+    - **Longer windows** (5-7 years) = smoother signals, better for identifying long-term supercycles
+    
+    #### Probability Smoothing
+    
+    - **Enabled**: {"Yes" if enable_smoothing else "No"}
+    - **Window**: {smooth_periods} {data_frequency.lower()} periods{" (recommended for supercycle analysis)" if enable_smoothing else ""}
+    - **Method**: Simple Moving Average
+    - **Purpose**: Remove short-term noise to reveal underlying regime trend
+    - **Trade-off**: Smoothing reduces responsiveness but increases signal quality
     
     #### Probability Function
     
