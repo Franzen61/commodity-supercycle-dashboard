@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 
 st.set_page_config(layout="wide")
@@ -122,9 +123,13 @@ except Exception as e:
 # Copper/Gold Ratio
 if "Copper" in df.columns and "Gold" in df.columns:
     df["Copper_Gold"] = df["Copper"] / df["Gold"]
+    st.sidebar.success(f"✅ Copper/Gold calculated: {df['Copper_Gold'].iloc[-1]:.4f}")
 else:
-    st.warning("⚠️ Copper or Gold data missing")
-    df["Copper_Gold"] = 0
+    if "Copper" not in df.columns:
+        st.sidebar.warning("⚠️ Copper data missing")
+    if "Gold" not in df.columns:
+        st.sidebar.warning("⚠️ Gold data missing")
+    df["Copper_Gold"] = np.nan
 
 # Momentum
 if "GSCI" in df.columns:
@@ -132,9 +137,10 @@ if "GSCI" in df.columns:
     # Per monthly: 6 mesi
     momentum_periods = 26 if data_frequency == "Weekly" else 6
     df["Momentum_6M"] = df["GSCI"].pct_change(momentum_periods) * 100
+    st.sidebar.success(f"✅ Momentum calculated: {df['Momentum_6M'].iloc[-1]:.2f}%")
 else:
-    st.warning("⚠️ GSCI data missing")
-    df["Momentum_6M"] = 0
+    st.sidebar.warning("⚠️ GSCI data missing")
+    df["Momentum_6M"] = np.nan
 
 # Rimuovi NaN
 df = df.dropna(subset=["Copper_Gold", "Real_Yield", "Momentum_6M"])
@@ -330,36 +336,58 @@ with tab2:
 with tab3:
     st.subheader("💹 Raw Indicators")
     
-    # Plot raw values
-    fig3 = go.Figure()
-    
+    # Plot each indicator in separate subplots per migliore leggibilità
     raw_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M"]
+    available_raw = [col for col in raw_cols if col in df.columns]
     
-    for col in raw_cols:
-        if col in df.columns:
-            fig3.add_trace(go.Scatter(
-                x=df.index,
-                y=df[col],
-                name=col.replace('_', ' '),
-                yaxis='y' if col == raw_cols[0] else 'y2'
-            ))
-    
-    fig3.update_layout(
-        yaxis=dict(title="Primary Axis"),
-        yaxis2=dict(title="Secondary Axis", overlaying='y', side='right'),
-        hovermode='x unified',
-        height=600
-    )
-    
-    st.plotly_chart(fig3, use_container_width=True)
+    if len(available_raw) > 0:
+        fig3 = make_subplots(
+            rows=len(available_raw), 
+            cols=1,
+            subplot_titles=[col.replace('_', ' ') for col in available_raw],
+            vertical_spacing=0.08
+        )
+        
+        for idx, col in enumerate(available_raw):
+            fig3.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df[col],
+                    name=col.replace('_', ' '),
+                    line=dict(width=2),
+                    showlegend=False
+                ),
+                row=idx+1,
+                col=1
+            )
+            
+            # Aggiungi linea zero per Momentum e Real Yield
+            if col in ["Momentum_6M", "Real_Yield"]:
+                fig3.add_hline(
+                    y=0, 
+                    line_dash="dash", 
+                    line_color="gray",
+                    row=idx+1,
+                    col=1
+                )
+        
+        fig3.update_layout(
+            height=300 * len(available_raw),
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig3, use_container_width=True)
     
     # Data table
     st.subheader("📋 Latest Data")
     display_cols = ["Real_Yield", "Copper_Gold", "DXY", "Momentum_6M", "Score", "Prob"]
-    st.dataframe(
-        df[[col for col in display_cols if col in df.columns]].tail(20).style.format("{:.2f}"),
-        use_container_width=True
-    )
+    available_display = [col for col in display_cols if col in df.columns]
+    
+    if len(available_display) > 0:
+        st.dataframe(
+            df[available_display].tail(20).style.format("{:.4f}"),
+            use_container_width=True
+        )
 
 with tab4:
     st.markdown(f"""
