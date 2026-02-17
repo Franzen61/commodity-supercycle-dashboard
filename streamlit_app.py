@@ -647,14 +647,112 @@ with tab3:
         fig3.update_layout(height=250 * len(available_raw), hovermode='x unified')
         st.plotly_chart(fig3, use_container_width=True)
     
-    st.subheader("📋 Latest Data")
-    display_cols = ["Real_Yield", "Copper_Gold", "Oil_Gold", "DXY", "Yield_Curve", 
-                    "Momentum_6M", "Score_Binary", "Prob_Smooth"]
-    available_display = [col for col in display_cols if col in df.columns]
+    st.subheader("📋 Complete Dataset (Raw Values + Z-Scores)")
     
-    if len(available_display) > 0:
-        st.dataframe(df[available_display].tail(20).style.format("{:.4f}"),
-                    use_container_width=True)
+    # Colonne raw values
+    raw_cols = ["GSCI", "Real_Yield", "Copper_Gold", "Oil_Gold", 
+                "DXY", "Yield_Curve", "Momentum_6M"]
+    
+    # Colonne z-score
+    z_cols_export = ["Real_Yield_z", "Copper_Gold_z", "Oil_Gold_z", 
+                     "DXY_z", "Yield_Curve_z", "Momentum_6M_z"]
+    
+    # Colonne score e probabilità
+    score_cols = ["Score_Binary", "Prob_Smooth"]
+    
+    # Combina tutte le colonne disponibili
+    all_export_cols = raw_cols + z_cols_export + score_cols
+    available_export = [col for col in all_export_cols if col in df.columns]
+    
+    # Toggle per vedere raw o z-scores
+    view_mode = st.radio("View Mode", 
+                        ["Raw Values only", "Z-Scores only", "Complete (Raw + Z-Scores)"],
+                        index=2, horizontal=True)
+    
+    if view_mode == "Raw Values only":
+        show_cols = [col for col in raw_cols + score_cols if col in df.columns]
+    elif view_mode == "Z-Scores only":
+        show_cols = [col for col in z_cols_export + score_cols if col in df.columns]
+    else:
+        show_cols = available_export
+    
+    # Preview ultimi 24 periodi
+    st.caption(f"Preview: last 24 periods. Download CSV for full history ({len(df)} periods).")
+    
+    if len(show_cols) > 0:
+        st.dataframe(
+            df[show_cols].tail(24).style.format("{:.4f}"),
+            use_container_width=True
+        )
+    
+    st.markdown("---")
+    
+    # ---- DOWNLOAD CSV ----
+    st.subheader("📥 Download Full Dataset")
+    
+    st.markdown("""
+    **Il CSV include:**
+    - Tutti i periodi storici disponibili
+    - Valori raw (Real Yield, Ratios, DXY, Yield Curve, Momentum)
+    - Z-scores calcolati (pronti per Excel/Google Sheets/LibreOffice)
+    - GSCI price (per calcolare forward returns)
+    - Score binario e probabilità smoothed
+    
+    **Istruzioni:**
+    - **Google Sheets**: File → Importa → Carica → Separatore: virgola
+    - **LibreOffice Calc**: Apri direttamente il file .csv
+    """)
+    
+    # Prepara dataframe per export
+    export_df = df[available_export].copy()
+    export_df.index.name = "Date"
+    
+    # Rinomina colonne per chiarezza
+    rename_map = {
+        "GSCI": "GSCI_Price",
+        "Real_Yield": "Real_Yield_pct",
+        "Copper_Gold": "Copper_Gold_Ratio",
+        "Oil_Gold": "Oil_Gold_Ratio",
+        "DXY": "DXY_Index",
+        "Yield_Curve": "Yield_Curve_10Y3M_bp",
+        "Momentum_6M": "Momentum_6M_pct",
+        "Real_Yield_z": "Real_Yield_Zscore",
+        "Copper_Gold_z": "CopperGold_Zscore",
+        "Oil_Gold_z": "OilGold_Zscore",
+        "DXY_z": "DXY_Zscore",
+        "Yield_Curve_z": "YieldCurve_Zscore",
+        "Momentum_6M_z": "Momentum_Zscore",
+        "Score_Binary": "Binary_Score_0to6",
+        "Prob_Smooth": "Supercycle_Probability"
+    }
+    
+    export_df = export_df.rename(columns={k: v for k, v in rename_map.items() if k in export_df.columns})
+    
+    # Converti in CSV
+    csv_data = export_df.to_csv(date_format='%Y-%m-%d')
+    
+    # Info sul dataset
+    col_info1, col_info2, col_info3 = st.columns(3)
+    with col_info1:
+        st.metric("Periodi totali", len(export_df))
+    with col_info2:
+        st.metric("Data inizio", export_df.index[0].strftime('%Y-%m-%d'))
+    with col_info3:
+        st.metric("Data fine", export_df.index[-1].strftime('%Y-%m-%d'))
+    
+    # Bottone download
+    filename = f"commodity_supercycle_data_{data_frequency.lower()}_{export_df.index[-1].strftime('%Y%m%d')}.csv"
+    
+    st.download_button(
+        label="📥 Download CSV (Raw + Z-Scores + GSCI)",
+        data=csv_data,
+        file_name=filename,
+        mime="text/csv",
+        help="Scarica dataset completo con Z-scores pronti per analisi in Google Sheets o LibreOffice"
+    )
+    
+    st.caption(f"⚙️ Parametri: {data_frequency} | Z-score window: {zscore_years} anni | BE Inflation: {inflation_assumption:.2f}%")
+    st.caption("💡 Consiglio: Usa frequenza Monthly per backtesting in Sheets - più gestibile e meno rumorosa.")
 
 with tab4:
     st.markdown(f"""
