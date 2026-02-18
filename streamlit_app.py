@@ -266,113 +266,75 @@ if "Momentum_6M_z" in df.columns:
     df["Momentum_Slope"] = df["Momentum_6M_z"].diff(slope_periods)
 
 # ============================================================================
-# REGIME PROBABILITY MODEL (LIVELLO B - PROBABILISTICO)
+# REGIME SCORE (CONTINUOUS - 6 INDICATORI)
 # ============================================================================
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
-# --------------------------------------------------------------------------
-# 1️⃣  DEFINIZIONE PESI DINAMICI (più robusti macro-driven)
-# --------------------------------------------------------------------------
-
-weights = {
-    "Real_Yield": 0.25,      # Driver macro dominante
-    "Yield_Curve": 0.20,     # Ciclo economico
-    "Copper_Gold": 0.20,     # Growth vs Fear
-    "Oil_Gold": 0.15,        # Inflation impulse
-    "DXY": 0.10,             # Dollar regime
-    "Momentum_6M": 0.10      # Trend confirmation
-}
-
-# --------------------------------------------------------------------------
-# 2️⃣  SCORE CONTINUO (NON BINARIO)
-# --------------------------------------------------------------------------
-
-score_components = []
-available_weights = []
+score_values = {}
 
 if "Real_Yield_z" in df.columns:
-    score_components.append(-df["Real_Yield_z"])
-    available_weights.append(weights["Real_Yield"])
-
-if "Yield_Curve_z" in df.columns:
-    score_components.append(df["Yield_Curve_z"])
-    available_weights.append(weights["Yield_Curve"])
-
+    score_values['Real_Yield'] = sigmoid(-df["Real_Yield_z"]) * weights['Real_Yield']
+    
 if "Copper_Gold_z" in df.columns:
-    score_components.append(df["Copper_Gold_z"])
-    available_weights.append(weights["Copper_Gold"])
+    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"]) * weights['Copper_Gold']
 
 if "Oil_Gold_z" in df.columns:
-    score_components.append(df["Oil_Gold_z"])
-    available_weights.append(weights["Oil_Gold"])
-
+    score_values['Oil_Gold'] = sigmoid(df["Oil_Gold_z"]) * weights['Oil_Gold']
+    
 if "DXY_z" in df.columns:
-    score_components.append(-df["DXY_z"])
-    available_weights.append(weights["DXY"])
+    score_values['DXY'] = sigmoid(-df["DXY_z"]) * weights['DXY']
 
+if "Yield_Curve_z" in df.columns:
+    score_values['Yield_Curve'] = sigmoid(df["Yield_Curve_z"]) * weights['Yield_Curve']
+    
 if "Momentum_6M_z" in df.columns:
-    score_components.append(df["Momentum_6M_z"])
-    available_weights.append(weights["Momentum_6M"])
+    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"]) * weights['Momentum_6M']
 
-if len(score_components) == 0:
-    st.error("❌ Nessun indicatore disponibile per il regime model")
-    st.stop()
+df["Score_Continuous"] = sum(score_values.values())
 
-# Normalizzazione dinamica dei pesi (se manca qualche indicatore)
-available_weights = np.array(available_weights)
-available_weights = available_weights / available_weights.sum()
-
-# Score continuo pesato
-df["Score_Continuous"] = 0
-for comp, w in zip(score_components, available_weights):
-    df["Score_Continuous"] += comp * w
-
-# --------------------------------------------------------------------------
-# 3️⃣  PROBABILITÀ SUPER-CYCLE (sigmoid centrata)
-# --------------------------------------------------------------------------
-
-df["Prob"] = sigmoid(1.5 * df["Score_Continuous"])
-
-# --------------------------------------------------------------------------
-# 4️⃣  SCORE BINARIO (solo diagnostico)
-# --------------------------------------------------------------------------
-
+# Binary score (6 indicatori)
 binary_components = []
+available_indicators = []
 
 if "Real_Yield_z" in df.columns:
     binary_components.append((df["Real_Yield_z"] < 0).astype(int))
-
-if "Yield_Curve_z" in df.columns:
-    binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
-
+    available_indicators.append("Real Yield")
+    
 if "Copper_Gold_z" in df.columns:
     binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
+    available_indicators.append("Copper/Gold")
 
 if "Oil_Gold_z" in df.columns:
     binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
-
+    available_indicators.append("Oil/Gold")
+    
 if "DXY_z" in df.columns:
     binary_components.append((df["DXY_z"] < 0).astype(int))
+    available_indicators.append("Dollar")
 
+if "Yield_Curve_z" in df.columns:
+    binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
+    available_indicators.append("Yield Curve")
+    
 if "Momentum_6M_z" in df.columns:
     binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
+    available_indicators.append("Momentum")
 
 if len(binary_components) > 0:
     df["Score_Binary"] = sum(binary_components)
+    max_score = len(binary_components)
 else:
-    df["Score_Binary"] = np.nan
+    st.error("❌ Unable to calculate score")
+    st.stop()
 
-# --------------------------------------------------------------------------
-# 5️⃣  SMOOTHING OPZIONALE
-# --------------------------------------------------------------------------
+df["Prob"] = sigmoid(6 * (df["Score_Continuous"] - 0.5))
 
 if enable_smoothing and smooth_periods > 1:
     df["Prob_Smooth"] = df["Prob"].rolling(smooth_periods, min_periods=1).mean()
 else:
     df["Prob_Smooth"] = df["Prob"]
-
 
 # ============================================================================
 # TURNING POINT DETECTION (BOTTOM & TOP SIGNALS)
