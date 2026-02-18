@@ -447,6 +447,7 @@ active_signals_text = ", ".join([
 st.markdown(f"**Active Signals** ({int(latest['ScoreBinary'])}/{max_score}): {active_signals_text}")
 
 # Momentum slope status
+
 if 'MomentumSlope' in df.columns:
     mom_slope = latest['MomentumSlope']
     if mom_slope >= 1.5:
@@ -467,6 +468,19 @@ if weight_mode == "Custom Weights (Advanced)":
     """)
 
 st.markdown("---")
+
+# ✅ FIX DEFINITIVO: Active Signals (righe 444-450)
+active_signals = []
+for i, ind in enumerate(available_indicators):
+    status_icon = "✅" if binary_components[i].iloc[-1] == 1 else "❌"
+    active_signals.append(f"{status_icon} {ind}")
+
+active_signals_text = ", ".join(active_signals)
+st.markdown(f"**Active Signals** ({int(latest['ScoreBinary'])}/{max_score}): {active_signals_text}")
+
+# FINE SOSTITUZIONE - continua con Market Signals (riga ~453)
+current_signals = check_alerts(latest, thresholds)
+
 
 # Market signals
 current_signals = check_alerts(latest, thresholds)
