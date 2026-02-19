@@ -266,75 +266,55 @@ if "Momentum_6M_z" in df.columns:
     df["Momentum_Slope"] = df["Momentum_6M_z"].diff(slope_periods)
 
 # ============================================================================
-# REGIME SCORE (CONTINUOUS - 6 INDICATORI)
+# REGIME SCORE (LINEAR MACRO MODEL - IMPROVED v4.1)
 # ============================================================================
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
-score_values = {}
+score_components = []
 
+# Real Yield (negativo = bullish commodities)
 if "Real_Yield_z" in df.columns:
-    score_values['Real_Yield'] = sigmoid(-df["Real_Yield_z"]) * weights['Real_Yield']
-    
+    score_components.append(-df["Real_Yield_z"] * weights['Real_Yield'])
+
+# Copper/Gold (positivo = bullish)
 if "Copper_Gold_z" in df.columns:
-    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"]) * weights['Copper_Gold']
+    score_components.append(df["Copper_Gold_z"] * weights['Copper_Gold'])
 
+# Oil/Gold (positivo = bullish)
 if "Oil_Gold_z" in df.columns:
-    score_values['Oil_Gold'] = sigmoid(df["Oil_Gold_z"]) * weights['Oil_Gold']
-    
+    score_components.append(df["Oil_Gold_z"] * weights['Oil_Gold'])
+
+# DXY (negativo = bullish commodities)
 if "DXY_z" in df.columns:
-    score_values['DXY'] = sigmoid(-df["DXY_z"]) * weights['DXY']
+    score_components.append(-df["DXY_z"] * weights['DXY'])
 
+# Yield Curve (positiva = bullish growth)
 if "Yield_Curve_z" in df.columns:
-    score_values['Yield_Curve'] = sigmoid(df["Yield_Curve_z"]) * weights['Yield_Curve']
-    
+    score_components.append(df["Yield_Curve_z"] * weights['Yield_Curve'])
+
+# Momentum (positivo = bullish trend)
 if "Momentum_6M_z" in df.columns:
-    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"]) * weights['Momentum_6M']
+    score_components.append(df["Momentum_6M_z"] * weights['Momentum_6M'])
 
-df["Score_Continuous"] = sum(score_values.values())
-
-# Binary score (6 indicatori)
-binary_components = []
-available_indicators = []
-
-if "Real_Yield_z" in df.columns:
-    binary_components.append((df["Real_Yield_z"] < 0).astype(int))
-    available_indicators.append("Real Yield")
-    
-if "Copper_Gold_z" in df.columns:
-    binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
-    available_indicators.append("Copper/Gold")
-
-if "Oil_Gold_z" in df.columns:
-    binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
-    available_indicators.append("Oil/Gold")
-    
-if "DXY_z" in df.columns:
-    binary_components.append((df["DXY_z"] < 0).astype(int))
-    available_indicators.append("Dollar")
-
-if "Yield_Curve_z" in df.columns:
-    binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
-    available_indicators.append("Yield Curve")
-    
-if "Momentum_6M_z" in df.columns:
-    binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
-    available_indicators.append("Momentum")
-
-if len(binary_components) > 0:
-    df["Score_Binary"] = sum(binary_components)
-    max_score = len(binary_components)
-else:
-    st.error("❌ Unable to calculate score")
+if len(score_components) == 0:
+    st.error("❌ Unable to calculate regime score")
     st.stop()
 
-df["Prob"] = sigmoid(6 * (df["Score_Continuous"] - 0.5))
+# Linear macro score (può andare circa da -3 a +3)
+df["Score_Continuous"] = sum(score_components)
 
+# Trasformazione finale in probabilità (UNA sola sigmoid)
+# Coefficiente 1.8 calibrato per avere estremi realistici ma non eccessivi
+df["Prob"] = sigmoid(1.8 * df["Score_Continuous"])
+
+# Smoothing (come prima)
 if enable_smoothing and smooth_periods > 1:
     df["Prob_Smooth"] = df["Prob"].rolling(smooth_periods, min_periods=1).mean()
 else:
     df["Prob_Smooth"] = df["Prob"]
+
 
 # ============================================================================
 # TURNING POINT DETECTION (BOTTOM & TOP SIGNALS)
