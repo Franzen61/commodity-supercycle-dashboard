@@ -1,8 +1,8 @@
 """
-COMMODITY SUPERCYCLE DASHBOARD v4.2 - INSTITUTIONAL GRADE
+COMMODITY SUPERCYCLE DASHBOARD v4.1 - RESEARCH GRADE + DIVERGENCE ANALYSIS
 ===========================================================================
 Con Yield Curve 10Y-3M, Real Yield migliorato e Momentum Divergence Detection
-6 indicatori macro + Signal Alignment (Conviction Level) + Sigmoid istituzionale
+6 indicatori macro + analisi divergenze per identificazione turning points
 """
 
 import streamlit as st
@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-st.set_page_config(layout="wide", page_title="Commodity Supercycle Dashboard v4.2")
-st.title("📊 Commodity Supercycle Regime Model v4.2")
+st.set_page_config(layout="wide", page_title="Commodity Supercycle Dashboard v4.1")
+st.title("📊 Commodity Supercycle Regime Model v4.1")
 
 # ============================================================================
 # SIDEBAR - CONFIGURAZIONE
@@ -266,81 +266,55 @@ if "Momentum_6M_z" in df.columns:
     df["Momentum_Slope"] = df["Momentum_6M_z"].diff(slope_periods)
 
 # ============================================================================
-# REGIME SCORE (INSTITUTIONAL-ALIGNED v4.2)
+# REGIME SCORE (LINEAR MACRO MODEL - IMPROVED v4.1)
 # ============================================================================
-
-# Sigmoid steepness: 3 = institutional/buy&hold (slow, smooth transitions)
-#                   6 = retail (fast, reactive, more false signals)
-# Changed to 3 for buy & hold investors - reduces whipsaws
-SIGMOID_STEEPNESS = 3.0
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
-score_values = {}
+score_components = []
 
+# Real Yield (negativo = bullish commodities)
 if "Real_Yield_z" in df.columns:
-    score_values['Real_Yield'] = sigmoid(-df["Real_Yield_z"]) * weights['Real_Yield']
-    
+    score_components.append(-df["Real_Yield_z"] * weights['Real_Yield'])
+
+# Copper/Gold (positivo = bullish)
 if "Copper_Gold_z" in df.columns:
-    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"]) * weights['Copper_Gold']
+    score_components.append(df["Copper_Gold_z"] * weights['Copper_Gold'])
 
+# Oil/Gold (positivo = bullish)
 if "Oil_Gold_z" in df.columns:
-    score_values['Oil_Gold'] = sigmoid(df["Oil_Gold_z"]) * weights['Oil_Gold']
-    
+    score_components.append(df["Oil_Gold_z"] * weights['Oil_Gold'])
+
+# DXY (negativo = bullish commodities)
 if "DXY_z" in df.columns:
-    score_values['DXY'] = sigmoid(-df["DXY_z"]) * weights['DXY']
+    score_components.append(-df["DXY_z"] * weights['DXY'])
 
+# Yield Curve (positiva = bullish growth)
 if "Yield_Curve_z" in df.columns:
-    score_values['Yield_Curve'] = sigmoid(df["Yield_Curve_z"]) * weights['Yield_Curve']
-    
+    score_components.append(df["Yield_Curve_z"] * weights['Yield_Curve'])
+
+# Momentum (positivo = bullish trend)
 if "Momentum_6M_z" in df.columns:
-    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"]) * weights['Momentum_6M']
+    score_components.append(df["Momentum_6M_z"] * weights['Momentum_6M'])
 
-df["Score_Continuous"] = sum(score_values.values())
-
-# Binary score (6 indicatori)
-binary_components = []
-available_indicators = []
-
-if "Real_Yield_z" in df.columns:
-    binary_components.append((df["Real_Yield_z"] < 0).astype(int))
-    available_indicators.append("Real Yield")
-    
-if "Copper_Gold_z" in df.columns:
-    binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
-    available_indicators.append("Copper/Gold")
-
-if "Oil_Gold_z" in df.columns:
-    binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
-    available_indicators.append("Oil/Gold")
-    
-if "DXY_z" in df.columns:
-    binary_components.append((df["DXY_z"] < 0).astype(int))
-    available_indicators.append("Dollar")
-
-if "Yield_Curve_z" in df.columns:
-    binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
-    available_indicators.append("Yield Curve")
-    
-if "Momentum_6M_z" in df.columns:
-    binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
-    available_indicators.append("Momentum")
-
-if len(binary_components) > 0:
-    df["Score_Binary"] = sum(binary_components)
-    max_score = len(binary_components)
-else:
-    st.error("❌ Unable to calculate score")
+if len(score_components) == 0:
+    st.error("❌ Unable to calculate regime score")
     st.stop()
 
-# MACRO REGIME PROBABILITY - Using institutional steepness (3 instead of 6)
-df["Prob"] = sigmoid(SIGMOID_STEEPNESS * (df["Score_Continuous"] - 0.5))
+# Linear macro score (può andare circa da -3 a +3)
+df["Score_Continuous"] = sum(score_components)
 
+# Trasformazione finale in probabilità (UNA sola sigmoid)
+# Coefficiente 1.8 calibrato per avere estremi realistici ma non eccessivi
+df["Prob"] = sigmoid(1.8 * df["Score_Continuous"])
+
+# Smoothing (come prima)
 if enable_smoothing and smooth_periods > 1:
     df["Prob_Smooth"] = df["Prob"].rolling(smooth_periods, min_periods=1).mean()
 else:
     df["Prob_Smooth"] = df["Prob"]
+
 
 # ============================================================================
 # TURNING POINT DETECTION (BOTTOM & TOP SIGNALS)
@@ -359,50 +333,7 @@ df["Signal_Top"] = (
     (df["Prob_Smooth"] > 0.60)
 ).astype(int)
 
-# ============================================================================
-# SIGNAL ALIGNMENT (CONVICTION LEVEL) - v4.2 NEW
-# ============================================================================
-
-def calculate_signal_alignment(row):
-    """
-    Calcola alignment tra macro regime e turning point signals
-    
-    HIGH: Regime e signals allineati → massima conviction
-    MEDIUM: Divergenza costruttiva (es: bear regime + bottom signal)
-    LOW: Divergenza pericolosa (es: bull regime + top warning)
-    NEUTRAL: Nessun segnale chiaro
-    """
-    prob = row.get('Prob_Smooth', 0.5)
-    mom_slope = row.get('Momentum_Slope', 0)
-    bottom_sig = row.get('Signal_Bottom', 0)
-    top_sig = row.get('Signal_Top', 0)
-    
-    # HIGH CONVICTION: Alignment perfetto
-    if prob > 0.65 and mom_slope > 0.5:
-        return "HIGH", "Bull regime + Positive momentum = Strong bullish"
-    elif prob < 0.35 and mom_slope < -0.5:
-        return "HIGH", "Bear regime + Negative momentum = Strong bearish"
-    
-    # MEDIUM CONVICTION: Divergenza costruttiva (bottom forming)
-    elif bottom_sig == 1:
-        return "MEDIUM", "Bottom signal active - Early accumulation opportunity despite bear regime"
-    elif prob < 0.40 and mom_slope > 1.0:
-        return "MEDIUM", "Bear regime but momentum improving - Bottom may be forming"
-    
-    # LOW CONVICTION: Divergenza pericolosa (top warning)
-    elif top_sig == 1:
-        return "LOW", "Top warning active - Momentum weakening despite high probability"
-    elif prob > 0.70 and mom_slope < -0.5:
-        return "LOW", "Bull regime but momentum weakening - Caution advised"
-    
-    # NEUTRAL
-    else:
-        return "NEUTRAL", "Mixed signals - No clear alignment"
-
 latest = df.iloc[-1]
-
-# Calcola signal alignment per latest
-alignment_level, alignment_context = calculate_signal_alignment(latest)
 
 # ============================================================================
 # ALERT SYSTEM (Informational - 6 Indicatori)
@@ -419,7 +350,7 @@ def check_alerts(row, thresholds):
             'severity': 'high',
             'message': 'Ratios oversold + Momentum divergence detected',
             'color': 'info',
-            'context': 'Historical win rate: 100% (4/4 cases). Avg 12M return: +50%. IMPORTANT: This signal identifies historically favorable conditions. The macro regime may remain restrictive for months before the actual bottom. These signals typically anticipate the bottom by 1-6 months.'
+            'context': 'Historical win rate: 100% (4/4 cases). Avg 12M return: +50%. Pattern precedes major rallies by 1-3 months.'
         })
     
     # TOP WARNING (NEW!)
@@ -616,17 +547,6 @@ if "Momentum_Slope" in df.columns:
         slope_status = "🔴 Strong negative (bearish divergence)"
     
     st.markdown(f"**Momentum Slope (3M):** {slope_status} ({mom_slope:+.2f})")
-
-# SIGNAL ALIGNMENT (NEW v4.2)
-alignment_color_map = {
-    "HIGH": "🟢",
-    "MEDIUM": "🟡",
-    "LOW": "🔴",
-    "NEUTRAL": "⚪"
-}
-
-st.markdown(f"**Signal Alignment:** {alignment_color_map[alignment_level]} **{alignment_level} CONVICTION**")
-st.caption(f"💡 {alignment_context}")
 
 # Show weights if custom
 if weight_mode == "Custom Weights (Advanced)":
@@ -1353,7 +1273,7 @@ with col4:
 
 st.markdown("""
 <div style='text-align: center; color: gray; margin-top: 20px;'>
-    <p>📊 Commodity Supercycle Dashboard v4.2 - Institutional Grade | 6 Macro Indicators + Signal Alignment</p>
-    <p style='font-size: 0.9em;'>🆕 Sigmoid Steepness=3 (Institutional) | Conviction Level Display | Enhanced Disclaimer</p>
+    <p>📊 Commodity Supercycle Dashboard v4.1 - Research Grade | 6 Macro Indicators + Divergence Analysis</p>
+    <p style='font-size: 0.9em;'>🆕 Momentum Slope Integration | Turning Point Detection (100% Bottom / 75% Top Win Rate)</p>
 </div>
 """, unsafe_allow_html=True)
