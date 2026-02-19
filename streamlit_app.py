@@ -266,7 +266,7 @@ if "Momentum_6M_z" in df.columns:
     df["Momentum_Slope"] = df["Momentum_6M_z"].diff(slope_periods)
 
 # ============================================================================
-# REGIME SCORE (LINEAR MACRO MODEL - IMPROVED v4.1)
+# REGIME SCORE (LINEAR VERSION)
 # ============================================================================
 
 def sigmoid(x):
@@ -274,46 +274,64 @@ def sigmoid(x):
 
 score_components = []
 
-# Real Yield (negativo = bullish commodities)
 if "Real_Yield_z" in df.columns:
     score_components.append(-df["Real_Yield_z"] * weights['Real_Yield'])
 
-# Copper/Gold (positivo = bullish)
 if "Copper_Gold_z" in df.columns:
     score_components.append(df["Copper_Gold_z"] * weights['Copper_Gold'])
 
-# Oil/Gold (positivo = bullish)
 if "Oil_Gold_z" in df.columns:
     score_components.append(df["Oil_Gold_z"] * weights['Oil_Gold'])
 
-# DXY (negativo = bullish commodities)
 if "DXY_z" in df.columns:
     score_components.append(-df["DXY_z"] * weights['DXY'])
 
-# Yield Curve (positiva = bullish growth)
 if "Yield_Curve_z" in df.columns:
     score_components.append(df["Yield_Curve_z"] * weights['Yield_Curve'])
 
-# Momentum (positivo = bullish trend)
 if "Momentum_6M_z" in df.columns:
     score_components.append(df["Momentum_6M_z"] * weights['Momentum_6M'])
 
 if len(score_components) == 0:
-    st.error("❌ Unable to calculate regime score")
+    st.error("Unable to calculate regime score")
     st.stop()
 
-# Linear macro score (può andare circa da -3 a +3)
 df["Score_Continuous"] = sum(score_components)
 
-# Trasformazione finale in probabilità (UNA sola sigmoid)
-# Coefficiente 1.8 calibrato per avere estremi realistici ma non eccessivi
+binary_components = []
+
+if "Real_Yield_z" in df.columns:
+    binary_components.append((-df["Real_Yield_z"] > 0).astype(int))
+
+if "Copper_Gold_z" in df.columns:
+    binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
+
+if "Oil_Gold_z" in df.columns:
+    binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
+
+if "DXY_z" in df.columns:
+    binary_components.append((-df["DXY_z"] > 0).astype(int))
+
+if "Yield_Curve_z" in df.columns:
+    binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
+
+if "Momentum_6M_z" in df.columns:
+    binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
+
+if len(binary_components) > 0:
+    df["Score_Binary"] = sum(binary_components)
+    max_score = len(binary_components)
+else:
+    df["Score_Binary"] = 0
+    max_score = 0
+
 df["Prob"] = sigmoid(1.8 * df["Score_Continuous"])
 
-# Smoothing (come prima)
 if enable_smoothing and smooth_periods > 1:
     df["Prob_Smooth"] = df["Prob"].rolling(smooth_periods, min_periods=1).mean()
 else:
     df["Prob_Smooth"] = df["Prob"]
+
 
 
 # ============================================================================
