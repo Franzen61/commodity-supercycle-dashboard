@@ -28,7 +28,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
     
     data_frequency = st.selectbox("Data Frequency", ["Weekly", "Monthly"], index=1)
-    years_back = st.slider("Years of History", 10, 30, 25)
+    years_back = st.slider("Years of History", 10, 30, 30)
     
     st.markdown("---")
     
