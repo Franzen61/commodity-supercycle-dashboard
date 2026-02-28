@@ -626,7 +626,7 @@ with tab1:
                 x=df.index,
                 y=df["GSCI"],
                 name="GSCI Price",
-                line=dict(color="rgba(255,255,255,0.25)", width=1.5),
+                line=dict(color="rgba(255,200,50,0.35)", width=1.5),
                 showlegend=True,
             ),
             row=1, col=1,
