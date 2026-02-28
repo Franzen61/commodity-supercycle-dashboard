@@ -616,8 +616,22 @@ with tab1:
         row_heights=[0.7, 0.3],
         subplot_titles=("Supercycle Probability with Dynamic Regime Zones", "Momentum Slope (Divergence Detector)"),
         vertical_spacing=0.1,
-        specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
+
+    # ---- GSCI PRICE OVERLAY ----
+    if "GSCI" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["GSCI"],
+                name="GSCI Price",
+                line=dict(color="rgba(255,255,255,0.25)", width=1.5),
+                showlegend=True,
+            ),
+            row=1, col=1,
+            secondary_y=True,
+        )
     
     # ---- SUBPLOT 1: PROBABILITY ----
     
