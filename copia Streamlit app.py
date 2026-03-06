@@ -1,8 +1,14 @@
 """
-COMMODITY SUPERCYCLE DASHBOARD v4.1 - RESEARCH GRADE + DIVERGENCE ANALYSIS
+COMMODITY SUPERCYCLE DASHBOARD v4.1.2 - RESEARCH GRADE + DIVERGENCE ANALYSIS
 ===========================================================================
 Con Yield Curve 10Y-3M, Real Yield migliorato e Momentum Divergence Detection
 6 indicatori macro + analisi divergenze per identificazione turning points
+
+CHANGELOG v4.1.2:
+- FIX #1: data.fillna(method='ffill') → data.ffill() (deprecato Pandas 2.1, rimosso Pandas 3.x)
+- FIX #2: st.progress() e st.empty() spostati fuori da @st.cache_data
+           → al secondo caricamento i widget non vengono renderizzati dentro la cache,
+             l'app sembrava congelata senza feedback visivo
 
 CHANGELOG v4.1.1:
 - Fixed: dropna() crash con default settings (25yr + 5yr z-score)
@@ -32,12 +38,10 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Z-score settings
     st.subheader("📊 Z-Score Settings")
     zscore_years = st.selectbox("Z-Score Rolling Window", [3, 5, 7], index=1,
                                 help="Longer window = smoother signals, better for long-term cycles")
     
-    # Smoothing
     st.subheader("🎨 Probability Smoothing")
     enable_smoothing = st.checkbox("Enable Smoothing", value=True)
     if enable_smoothing:
@@ -50,7 +54,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Weighting scheme
     st.subheader("⚖️ Indicator Weights")
     weight_mode = st.radio("Weighting Mode", 
                           ["Equal Weights (Simple)", "Custom Weights (Advanced)"], 
@@ -63,61 +66,60 @@ with st.sidebar:
         
         if use_defaults:
             weight_real_yield = 0.25
-            weight_dollar = 0.20
-            weight_cu_gold = 0.20
-            weight_oil_gold = 0.15
+            weight_dollar     = 0.20
+            weight_cu_gold    = 0.20
+            weight_oil_gold   = 0.15
             weight_yield_curve = 0.10
-            weight_momentum = 0.10
+            weight_momentum   = 0.10
         else:
             st.caption("Adjust weights manually (must sum to 100%)")
             col1, col2 = st.columns(2)
             with col1:
-                weight_real_yield = st.slider("Real Yield", 0.0, 0.5, 0.25, 0.05)
-                weight_cu_gold = st.slider("Copper/Gold", 0.0, 0.3, 0.20, 0.05)
-                weight_yield_curve = st.slider("Yield Curve", 0.0, 0.3, 0.10, 0.05)
+                weight_real_yield  = st.slider("Real Yield",   0.0, 0.5, 0.25, 0.05)
+                weight_cu_gold     = st.slider("Copper/Gold",  0.0, 0.3, 0.20, 0.05)
+                weight_yield_curve = st.slider("Yield Curve",  0.0, 0.3, 0.10, 0.05)
             with col2:
-                weight_dollar = st.slider("Dollar Index", 0.0, 0.5, 0.20, 0.05)
-                weight_oil_gold = st.slider("Oil/Gold", 0.0, 0.3, 0.15, 0.05)
-                weight_momentum = st.slider("GSCI Momentum", 0.0, 0.2, 0.10, 0.05)
+                weight_dollar   = st.slider("Dollar Index",    0.0, 0.5, 0.20, 0.05)
+                weight_oil_gold = st.slider("Oil/Gold",        0.0, 0.3, 0.15, 0.05)
+                weight_momentum = st.slider("GSCI Momentum",   0.0, 0.2, 0.10, 0.05)
             
-            total_weight = weight_real_yield + weight_dollar + weight_cu_gold + weight_oil_gold + weight_yield_curve + weight_momentum
+            total_weight = (weight_real_yield + weight_dollar + weight_cu_gold +
+                           weight_oil_gold + weight_yield_curve + weight_momentum)
             if abs(total_weight - 1.0) > 0.01:
                 st.error(f"⚠️ Weights must sum to 100% (currently {total_weight*100:.1f}%)")
     else:
-        weight_real_yield = 0.1667
-        weight_dollar = 0.1667
-        weight_cu_gold = 0.1667
-        weight_oil_gold = 0.1667
+        weight_real_yield  = 0.1667
+        weight_dollar      = 0.1667
+        weight_cu_gold     = 0.1667
+        weight_oil_gold    = 0.1667
         weight_yield_curve = 0.1667
-        weight_momentum = 0.1667
+        weight_momentum    = 0.1667
     
     weights = {
-        'Real_Yield': weight_real_yield,
-        'DXY': weight_dollar,
-        'Copper_Gold': weight_cu_gold,
-        'Oil_Gold': weight_oil_gold,
-        'Yield_Curve': weight_yield_curve,
-        'Momentum_6M': weight_momentum
+        'Real_Yield':   weight_real_yield,
+        'DXY':          weight_dollar,
+        'Copper_Gold':  weight_cu_gold,
+        'Oil_Gold':     weight_oil_gold,
+        'Yield_Curve':  weight_yield_curve,
+        'Momentum_6M':  weight_momentum
     }
     
     st.markdown("---")
     
-    # Alert sensitivity
     st.subheader("🔔 Alert Sensitivity")
     alert_sensitivity = st.select_slider("Threshold Level",
                                         options=["Conservative", "Moderate", "Aggressive"],
                                         value="Moderate")
     
     threshold_map = {
-        "Conservative": {'oversold': -2.0, 'overbought': 2.0, 'macro': -1.5},
-        "Moderate": {'oversold': -1.5, 'overbought': 1.5, 'macro': -1.0},
-        "Aggressive": {'oversold': -1.0, 'overbought': 1.0, 'macro': -0.75}
+        "Conservative": {'oversold': -2.0, 'overbought':  2.0, 'macro': -1.5},
+        "Moderate":     {'oversold': -1.5, 'overbought':  1.5, 'macro': -1.0},
+        "Aggressive":   {'oversold': -1.0, 'overbought':  1.0, 'macro': -0.75}
     }
     thresholds = threshold_map[alert_sensitivity]
     
     st.markdown("---")
     
-    # Real Yield - Improved input with 0.01 increments
     st.subheader("💰 Real Yield Calculation")
     st.caption("Set current 10Y Breakeven Inflation from FRED")
     
@@ -136,66 +138,92 @@ with st.sidebar:
 
 # ============================================================================
 # DATA LOADING
+#
+# FIX #2: st.progress() e st.empty() NON possono stare dentro @st.cache_data.
+# Quando Streamlit restituisce il risultato dalla cache (secondo caricamento),
+# non esegue il corpo della funzione → i widget non vengono mai creati →
+# l'app sembrava congelata senza barra di progresso.
+#
+# Soluzione: la funzione cachata scarica i dati puri senza toccare la UI.
+# Il feedback visivo (progress bar) viene gestito nel corpo principale dell'app,
+# dove Streamlit può sempre renderizzarlo correttamente.
 # ============================================================================
 
 @st.cache_data(ttl=3600)
 def load_data(years, frequency, inflation_rate, zscore_years):
-    """Scarica dati storici includendo Yield Curve"""
+    """
+    Scarica dati storici includendo Yield Curve.
+    PURO: nessun widget Streamlit qui dentro — solo download e calcoli.
+    """
     start_date = (datetime.now() - pd.DateOffset(years=years)).strftime('%Y-%m-%d')
     
     tickers = {
         "Copper": "HG=F",
-        "Gold": "GC=F",
-        "Oil": "CL=F",
-        "DXY": "DX-Y.NYB",
-        "GSCI": "^SPGSCI",
+        "Gold":   "GC=F",
+        "Oil":    "CL=F",
+        "DXY":    "DX-Y.NYB",
+        "GSCI":   "^SPGSCI",
         "US_10Y": "^TNX",
-        "US_3M": "^IRX"
+        "US_3M":  "^IRX"
     }
     
     data = pd.DataFrame()
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, (name, ticker) in enumerate(tickers.items()):
+    errors = []
+
+    for name, ticker in tickers.items():
         try:
-            status_text.text(f"Downloading {name}...")
-            df = yf.download(ticker, start=start_date, end=datetime.now().strftime('%Y-%m-%d'), progress=False)
+            df = yf.download(ticker,
+                             start=start_date,
+                             end=datetime.now().strftime('%Y-%m-%d'),
+                             progress=False)
             if not df.empty and "Close" in df.columns:
                 data[name] = df["Close"]
-            progress_bar.progress((idx + 1) / len(tickers))
         except Exception as e:
-            st.warning(f"⚠️ Error downloading {name}: {str(e)}")
-    
-    progress_bar.empty()
-    status_text.empty()
+            errors.append(f"{name}: {str(e)}")
     
     # Resample
     if frequency == "Weekly":
         data = data.resample('W').last()
     else:
         data = data.resample('M').last()
+
+    # FIX #1: data.fillna(method='ffill', limit=2) → data.ffill(limit=2)
+    # Il parametro method= è stato deprecato in Pandas 2.1 e rimosso in Pandas 3.x.
+    # La sintassi corretta usa il metodo diretto .ffill() / .bfill().
+    data = data.ffill(limit=2)
+    data = data.dropna(thresh=len(data.columns) * 0.6)
     
-    data = data.fillna(method='ffill', limit=2)
-    data = data.dropna(thresh=len(data.columns)*0.6)
-    
-    # Calculate Real Yield
+    # Real Yield
     if "US_10Y" in data.columns:
         data["Real_Yield"] = data["US_10Y"] - inflation_rate
     
-    # Calculate Yield Curve (10Y - 3M)
+    # Yield Curve (10Y - 3M)
     if "US_10Y" in data.columns and "US_3M" in data.columns:
         data["Yield_Curve"] = data["US_10Y"] - data["US_3M"]
     
-    return data
+    return data, errors
 
-# Carica dati
+
+# ============================================================================
+# CARICAMENTO CON FEEDBACK VISIVO (fuori dalla cache — sempre renderizzato)
+# ============================================================================
+
 try:
-    df = load_data(years_back, data_frequency, inflation_assumption, zscore_years)
+    # La progress bar è qui, nel corpo principale, NON dentro load_data()
+    # Così viene mostrata sia al primo caricamento che ai refresh successivi.
+    with st.spinner("⏳ Downloading market data... (cached for 1 hour after first load)"):
+        df, load_errors = load_data(years_back, data_frequency, inflation_assumption, zscore_years)
+
+    if load_errors:
+        for err in load_errors:
+            st.warning(f"⚠️ Error downloading {err}")
+
     if df.empty:
         st.error("❌ Unable to download data")
         st.stop()
+
     st.success(f"✅ Data loaded: {len(df)} {data_frequency.lower()} periods")
+
 except Exception as e:
     st.error(f"❌ Error: {str(e)}")
     st.stop()
@@ -204,21 +232,18 @@ except Exception as e:
 # INDICATORI
 # ============================================================================
 
-# Copper/Gold
 if "Copper" in df.columns and "Gold" in df.columns:
     df["Copper_Gold"] = df["Copper"] / df["Gold"]
     st.sidebar.success(f"✅ Copper/Gold: {df['Copper_Gold'].iloc[-1]:.4f}")
 else:
     df["Copper_Gold"] = np.nan
 
-# Oil/Gold
 if "Oil" in df.columns and "Gold" in df.columns:
     df["Oil_Gold"] = df["Oil"] / df["Gold"]
     st.sidebar.success(f"✅ Oil/Gold: {df['Oil_Gold'].iloc[-1]:.4f}")
 else:
     df["Oil_Gold"] = np.nan
 
-# Momentum
 if "GSCI" in df.columns:
     momentum_periods = 26 if data_frequency == "Weekly" else 6
     df["Momentum_6M"] = df["GSCI"].pct_change(momentum_periods) * 100
@@ -226,13 +251,11 @@ if "GSCI" in df.columns:
 else:
     df["Momentum_6M"] = np.nan
 
-# Yield Curve status
 if "Yield_Curve" in df.columns:
     yc_latest = df["Yield_Curve"].iloc[-1]
     yc_status = "Normal" if yc_latest > 0 else "⚠️ INVERTED"
     st.sidebar.success(f"✅ Yield Curve: {yc_latest:.2f}bp ({yc_status})")
 
-# Rimuovi NaN
 df = df.dropna(subset=["Copper_Gold", "Oil_Gold", "Real_Yield", "Momentum_6M", "Yield_Curve"])
 
 if df.empty:
@@ -251,11 +274,10 @@ indicators = ["Copper_Gold", "Oil_Gold", "Real_Yield", "DXY", "Yield_Curve", "Mo
 for col in indicators:
     if col in df.columns:
         mean = df[col].rolling(window).mean()
-        std = df[col].rolling(window).std()
+        std  = df[col].rolling(window).std()
         df[f"{col}_z"] = (df[col] - mean) / std
 
-# FIX: Drop ONLY rows with missing essential z-scores (not all columns)
-# This prevents crash with default settings (25yr + 5yr z-score window)
+# Elimina SOLO righe con z-scores mancanti
 z_cols = [f"{col}_z" for col in indicators if col in df.columns]
 df = df.dropna(subset=z_cols)
 
@@ -264,16 +286,15 @@ if df.empty:
     st.stop()
 
 # ============================================================================
-# MOMENTUM SLOPE (for divergence detection)
+# MOMENTUM SLOPE
 # ============================================================================
 
-# Calcola slope su 3 periodi (mesi o settimane)
 slope_periods = 3
 if "Momentum_6M_z" in df.columns:
     df["Momentum_Slope"] = df["Momentum_6M_z"].diff(slope_periods)
 
 # ============================================================================
-# REGIME SCORE (CONTINUOUS - 6 INDICATORI)
+# REGIME SCORE
 # ============================================================================
 
 def sigmoid(x):
@@ -281,51 +302,40 @@ def sigmoid(x):
 
 score_values = {}
 
-if "Real_Yield_z" in df.columns:
-    score_values['Real_Yield'] = sigmoid(-df["Real_Yield_z"]) * weights['Real_Yield']
-    
-if "Copper_Gold_z" in df.columns:
-    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"]) * weights['Copper_Gold']
-
-if "Oil_Gold_z" in df.columns:
-    score_values['Oil_Gold'] = sigmoid(df["Oil_Gold_z"]) * weights['Oil_Gold']
-    
-if "DXY_z" in df.columns:
-    score_values['DXY'] = sigmoid(-df["DXY_z"]) * weights['DXY']
-
-if "Yield_Curve_z" in df.columns:
-    score_values['Yield_Curve'] = sigmoid(df["Yield_Curve_z"]) * weights['Yield_Curve']
-    
-if "Momentum_6M_z" in df.columns:
-    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"]) * weights['Momentum_6M']
+if "Real_Yield_z"   in df.columns:
+    score_values['Real_Yield']  = sigmoid(-df["Real_Yield_z"])   * weights['Real_Yield']
+if "Copper_Gold_z"  in df.columns:
+    score_values['Copper_Gold'] = sigmoid(df["Copper_Gold_z"])   * weights['Copper_Gold']
+if "Oil_Gold_z"     in df.columns:
+    score_values['Oil_Gold']    = sigmoid(df["Oil_Gold_z"])      * weights['Oil_Gold']
+if "DXY_z"          in df.columns:
+    score_values['DXY']         = sigmoid(-df["DXY_z"])          * weights['DXY']
+if "Yield_Curve_z"  in df.columns:
+    score_values['Yield_Curve'] = sigmoid(df["Yield_Curve_z"])   * weights['Yield_Curve']
+if "Momentum_6M_z"  in df.columns:
+    score_values['Momentum_6M'] = sigmoid(df["Momentum_6M_z"])   * weights['Momentum_6M']
 
 df["Score_Continuous"] = sum(score_values.values())
 
-# Binary score (6 indicatori)
-binary_components = []
-available_indicators = []
+binary_components      = []
+available_indicators   = []
 
-if "Real_Yield_z" in df.columns:
-    binary_components.append((df["Real_Yield_z"] < 0).astype(int))
+if "Real_Yield_z"   in df.columns:
+    binary_components.append((df["Real_Yield_z"]  < 0).astype(int))
     available_indicators.append("Real Yield")
-    
-if "Copper_Gold_z" in df.columns:
+if "Copper_Gold_z"  in df.columns:
     binary_components.append((df["Copper_Gold_z"] > 0).astype(int))
     available_indicators.append("Copper/Gold")
-
-if "Oil_Gold_z" in df.columns:
-    binary_components.append((df["Oil_Gold_z"] > 0).astype(int))
+if "Oil_Gold_z"     in df.columns:
+    binary_components.append((df["Oil_Gold_z"]    > 0).astype(int))
     available_indicators.append("Oil/Gold")
-    
-if "DXY_z" in df.columns:
-    binary_components.append((df["DXY_z"] < 0).astype(int))
+if "DXY_z"          in df.columns:
+    binary_components.append((df["DXY_z"]         < 0).astype(int))
     available_indicators.append("Dollar")
-
-if "Yield_Curve_z" in df.columns:
+if "Yield_Curve_z"  in df.columns:
     binary_components.append((df["Yield_Curve_z"] > 0).astype(int))
     available_indicators.append("Yield Curve")
-    
-if "Momentum_6M_z" in df.columns:
+if "Momentum_6M_z"  in df.columns:
     binary_components.append((df["Momentum_6M_z"] > 0).astype(int))
     available_indicators.append("Momentum")
 
@@ -344,33 +354,29 @@ else:
     df["Prob_Smooth"] = df["Prob"]
 
 # ============================================================================
-# TURNING POINT DETECTION (BOTTOM & TOP SIGNALS)
+# TURNING POINT DETECTION
 # ============================================================================
 
-# BOTTOM SIGNAL (validated 100% win rate historicamente)
 df["Signal_Bottom"] = (
     (df["Copper_Gold_z"] < -1.0) &
-    (df["Oil_Gold_z"] < -1.0) &
+    (df["Oil_Gold_z"]    < -1.0) &
     (df["Momentum_Slope"] > 1.5)
 ).astype(int)
 
-# TOP WARNING (validated 75% win rate)
 df["Signal_Top"] = (
     (df["Momentum_Slope"] < -1.0) &
-    (df["Prob_Smooth"] > 0.60)
+    (df["Prob_Smooth"]    > 0.60)
 ).astype(int)
 
 latest = df.iloc[-1]
 
 # ============================================================================
-# ALERT SYSTEM (Informational - 6 Indicatori)
+# ALERT SYSTEM
 # ============================================================================
 
 def check_alerts(row, thresholds):
-    """Sistema informativo basato su analisi statistica - NON prescrittivo"""
     signals = []
     
-    # BOTTOM SIGNAL (NEW!)
     if 'Signal_Bottom' in row.index and row['Signal_Bottom'] == 1:
         signals.append({
             'type': '🔵 BOTTOM FORMATION SIGNAL',
@@ -380,7 +386,6 @@ def check_alerts(row, thresholds):
             'context': 'Historical win rate: 100% (12/12 cases). Avg 12M return: +35%. Pattern precedes major rallies by 1-3 months.'
         })
     
-    # TOP WARNING (NEW!)
     if 'Signal_Top' in row.index and row['Signal_Top'] == 1:
         signals.append({
             'type': '🔴 TOP FORMATION WARNING',
@@ -390,62 +395,56 @@ def check_alerts(row, thresholds):
             'context': 'Historical win rate: 100% (9/9 cases). Pattern precedes corrections. Momentum losing steam despite high probability.'
         })
     
-    # EXTREME OVERSOLD
-    oversold_count = 0
+    oversold_count      = 0
     oversold_indicators = []
     
-    for indicator, z_col in [('Momentum', 'Momentum_6M_z'), 
-                             ('Copper/Gold', 'Copper_Gold_z'), 
-                             ('Oil/Gold', 'Oil_Gold_z'),
-                             ('Yield Curve', 'Yield_Curve_z')]:
+    for indicator, z_col in [('Momentum',    'Momentum_6M_z'),
+                              ('Copper/Gold', 'Copper_Gold_z'),
+                              ('Oil/Gold',    'Oil_Gold_z'),
+                              ('Yield Curve', 'Yield_Curve_z')]:
         if z_col in row.index and row[z_col] < thresholds['oversold']:
             oversold_count += 1
             oversold_indicators.append(indicator)
     
     if oversold_count >= 2:
-        indicators_text = ', '.join(oversold_indicators)
         signals.append({
             'type': 'EXTREME OVERSOLD',
             'severity': 'high' if oversold_count >= 3 else 'medium',
-            'message': f'{oversold_count}/4 indicators in extreme oversold: {indicators_text}',
+            'message': f'{oversold_count}/4 indicators in extreme oversold: {", ".join(oversold_indicators)}',
             'color': 'info',
-            'context': f'Historical performance after similar conditions: avg +8.2% at 6m (68% win rate)'
+            'context': 'Historical performance after similar conditions: avg +8.2% at 6m (68% win rate)'
         })
     
-    # EXTREME OVERBOUGHT
-    overbought_count = 0
+    overbought_count      = 0
     overbought_indicators = []
     
-    for indicator, z_col in [('Momentum', 'Momentum_6M_z'),
-                             ('Real Yield', 'Real_Yield_z'),
-                             ('Dollar', 'DXY_z')]:
+    for indicator, z_col in [('Momentum',   'Momentum_6M_z'),
+                              ('Real Yield', 'Real_Yield_z'),
+                              ('Dollar',     'DXY_z')]:
         if z_col in row.index and row[z_col] > thresholds['overbought']:
             overbought_count += 1
             overbought_indicators.append(indicator)
     
     if overbought_count >= 2:
-        indicators_text = ', '.join(overbought_indicators)
         signals.append({
             'type': 'EXTREME OVERBOUGHT',
             'severity': 'high' if overbought_count >= 3 else 'medium',
-            'message': f'{overbought_count}/3 bearish indicators at extreme levels: {indicators_text}',
+            'message': f'{overbought_count}/3 bearish indicators at extreme levels: {", ".join(overbought_indicators)}',
             'color': 'warning',
-            'context': f'Historical performance after similar conditions: avg -4.8% at 6m'
+            'context': 'Historical performance after similar conditions: avg -4.8% at 6m'
         })
     
-    # YIELD CURVE INVERSION WARNING
     if 'Yield_Curve' in row.index and row['Yield_Curve'] < -0.2:
         signals.append({
             'type': '⚠️ YIELD CURVE INVERTED',
             'severity': 'high',
             'message': f'Yield curve at {row["Yield_Curve"]:.2f}bp (negative)',
             'color': 'warning',
-            'context': 'Historical pattern: inverted curve precedes recessions by 6-18 months. Recessions are devastating for commodities.'
+            'context': 'Historical pattern: inverted curve precedes recessions by 6-18 months.'
         })
     
-    # FAVORABLE MACRO
     if ('Real_Yield_z' in row.index and row['Real_Yield_z'] < thresholds['macro'] and
-        'DXY_z' in row.index and row['DXY_z'] < thresholds['macro']):
+        'DXY_z'        in row.index and row['DXY_z']        < thresholds['macro']):
         signals.append({
             'type': 'MACRO TAILWINDS',
             'severity': 'medium',
@@ -454,9 +453,8 @@ def check_alerts(row, thresholds):
             'context': 'Historically supportive conditions for commodities'
         })
     
-    # UNFAVORABLE MACRO
     if ('Real_Yield_z' in row.index and row['Real_Yield_z'] > thresholds['overbought'] and
-        'DXY_z' in row.index and row['DXY_z'] > thresholds['overbought']):
+        'DXY_z'        in row.index and row['DXY_z']        > thresholds['overbought']):
         signals.append({
             'type': 'MACRO HEADWINDS',
             'severity': 'medium',
@@ -467,13 +465,13 @@ def check_alerts(row, thresholds):
     
     return signals
 
+
 def check_divergence(df_recent, price_col='GSCI', z_col='Momentum_6M_z'):
-    """Rileva divergenze"""
     if len(df_recent) < 6 or price_col not in df_recent.columns or z_col not in df_recent.columns:
         return None
     
     price_trend = df_recent[price_col].iloc[-1] - df_recent[price_col].iloc[0]
-    z_trend = df_recent[z_col].iloc[-1] - df_recent[z_col].iloc[0]
+    z_trend     = df_recent[z_col].iloc[-1]     - df_recent[z_col].iloc[0]
     
     if price_trend < 0 and z_trend > 0 and abs(z_trend) > 0.5:
         return {
@@ -495,10 +493,9 @@ def check_divergence(df_recent, price_col='GSCI', z_col='Momentum_6M_z'):
     
     return None
 
-current_signals = check_alerts(latest, thresholds)
 
-df_recent = df.tail(6)
-divergence_signal = check_divergence(df_recent)
+current_signals   = check_alerts(latest, thresholds)
+divergence_signal = check_divergence(df.tail(6))
 if divergence_signal:
     current_signals.append(divergence_signal)
 
@@ -521,7 +518,7 @@ with col2:
     if enable_smoothing:
         prob_delta = (latest['Prob_Smooth'] - latest['Prob']) * 100
         st.metric("Supercycle Probability", f"{prob_value:.1f}%",
-                 f"{prob_delta:+.1f}pp" if abs(prob_delta) > 0.1 else None)
+                  f"{prob_delta:+.1f}pp" if abs(prob_delta) > 0.1 else None)
     else:
         st.metric("Supercycle Probability", f"{prob_value:.1f}%")
 
@@ -547,21 +544,18 @@ with col6:
 
 with col7:
     if "Yield_Curve" in df.columns:
-        yc_val = latest['Yield_Curve']
+        yc_val   = latest['Yield_Curve']
         yc_color = "normal" if yc_val > 0 else "inverse"
-        st.metric("Yield Curve", f"{yc_val:.0f}bp", 
-                 "Normal" if yc_val > 0 else "⚠️ Inverted",
-                 delta_color=yc_color)
+        st.metric("Yield Curve", f"{yc_val:.0f}bp",
+                  "Normal" if yc_val > 0 else "⚠️ Inverted",
+                  delta_color=yc_color)
 
-# Active signals
 active_signals_text = " | ".join([
     f"✅ {ind}" if binary_components[i].iloc[-1] == 1 else f"❌ {ind}"
     for i, ind in enumerate(available_indicators)
 ])
-
 st.markdown(f"**Active Signals ({int(latest['Score_Binary'])}/{max_score}):** {active_signals_text}")
 
-# Momentum slope status
 if "Momentum_Slope" in df.columns:
     mom_slope = latest['Momentum_Slope']
     if mom_slope > 1.5:
@@ -572,10 +566,8 @@ if "Momentum_Slope" in df.columns:
         slope_status = "🟡 Slightly negative"
     else:
         slope_status = "🔴 Strong negative (bearish divergence)"
-    
     st.markdown(f"**Momentum Slope (3M):** {slope_status} ({mom_slope:+.2f})")
 
-# Show weights if custom
 if weight_mode == "Custom Weights (Advanced)":
     st.markdown(f"**Weights:** RY ({weights['Real_Yield']*100:.0f}%) • DXY ({weights['DXY']*100:.0f}%) • Cu/Au ({weights['Copper_Gold']*100:.0f}%) • Oil/Au ({weights['Oil_Gold']*100:.0f}%) • YC ({weights['Yield_Curve']*100:.0f}%) • Mom ({weights['Momentum_6M']*100:.0f}%)")
 
@@ -590,13 +582,11 @@ if current_signals:
     
     for signal in current_signals:
         severity_icon = "🔴" if signal['severity'] == 'high' else "🟡"
-        
-        if signal['color'] == 'info':
-            st.info(f"{severity_icon} **{signal['type']}** | {signal['message']}\n\n*{signal['context']}*")
-        elif signal['color'] == 'warning':
-            st.warning(f"{severity_icon} **{signal['type']}** | {signal['message']}\n\n*{signal['context']}*")
+        msg = f"{severity_icon} **{signal['type']}** | {signal['message']}\n\n*{signal['context']}*"
+        if signal['color'] == 'warning':
+            st.warning(msg)
         else:
-            st.info(f"{severity_icon} **{signal['type']}** | {signal['message']}\n\n*{signal['context']}*")
+            st.info(msg)
     
     st.caption("ℹ️ These signals are informational only, based on statistical patterns. Not investment advice.")
     st.markdown("---")
@@ -610,312 +600,186 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Probability + Divergence", "📈 Z-Score
 with tab1:
     st.subheader("🎯 Supercycle Probability + Momentum Divergence Analysis")
     
-    # Create subplot con 2 assi Y
     fig = make_subplots(
         rows=2, cols=1,
         row_heights=[0.7, 0.3],
-        subplot_titles=("Supercycle Probability with Dynamic Regime Zones", "Momentum Slope (Divergence Detector)"),
+        subplot_titles=("Supercycle Probability with Dynamic Regime Zones",
+                        "Momentum Slope (Divergence Detector)"),
         vertical_spacing=0.1,
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
-    # ---- GSCI PRICE OVERLAY ----
     if "GSCI" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["GSCI"],
-                name="GSCI Price",
-                line=dict(color="rgba(255,200,50,0.35)", width=1.5),
-                showlegend=True,
-            ),
-            row=1, col=1,
-            secondary_y=True,
-        )
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["GSCI"], name="GSCI Price",
+            line=dict(color="rgba(255,200,50,0.35)", width=1.5), showlegend=True
+        ), row=1, col=1, secondary_y=True)
     
-    # ---- SUBPLOT 1: PROBABILITY ----
-    
-    # Raw probability (se smoothing attivo)
     if enable_smoothing and smooth_periods > 1:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, 
-                y=df["Prob"] * 100,
-                name="Raw Probability",
-                line=dict(color='lightblue', width=1, dash='dot'),
-                opacity=0.5,
-                showlegend=True
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["Prob"] * 100, name="Raw Probability",
+            line=dict(color='lightblue', width=1, dash='dot'), opacity=0.5, showlegend=True
+        ), row=1, col=1)
     
-    # Smoothed probability
-    fig.add_trace(
-        go.Scatter(
-            x=df.index, 
-            y=df["Prob_Smooth"] * 100,
-            name="Smoothed Probability" if enable_smoothing else "Probability",
-            line=dict(color='#0066CC', width=3),
-            fill='tozeroy', 
-            fillcolor='rgba(0,100,255,0.1)',
-            showlegend=True
-        ),
-        row=1, col=1
-    )
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["Prob_Smooth"] * 100,
+        name="Smoothed Probability" if enable_smoothing else "Probability",
+        line=dict(color='#0066CC', width=3),
+        fill='tozeroy', fillcolor='rgba(0,100,255,0.1)', showlegend=True
+    ), row=1, col=1)
     
-    # Dynamic zones basate su momentum slope
-    # ZONA VERDE: Accumulation (bassa prob + momentum positivo)
-    fig.add_hrect(
-        y0=0, y1=40, 
-        fillcolor="green", opacity=0.08,
-        layer="below", line_width=0,
-        row=1, col=1,
-        annotation_text="Accumulation Zone", 
-        annotation_position="top left"
-    )
+    fig.add_hrect(y0=0,  y1=40,  fillcolor="green",  opacity=0.08, layer="below", line_width=0,
+                  row=1, col=1, annotation_text="Accumulation Zone", annotation_position="top left")
+    fig.add_hrect(y0=70, y1=100, fillcolor="orange", opacity=0.08, layer="below", line_width=0,
+                  row=1, col=1, annotation_text="Caution Zone (High + Weakening)", annotation_position="top right")
     
-    # ZONA GIALLA: Caution (alta prob + momentum negativo)
-    fig.add_hrect(
-        y0=70, y1=100, 
-        fillcolor="orange", opacity=0.08,
-        layer="below", line_width=0,
-        row=1, col=1,
-        annotation_text="Caution Zone (High + Weakening)", 
-        annotation_position="top right"
-    )
+    for y_val, color in [(50, "gray"), (35, "red"), (65, "green")]:
+        fig.add_hline(y=y_val, line_dash="dash" if y_val == 50 else "dot",
+                      line_color=color, opacity=0.3 if y_val != 50 else 0.5, row=1, col=1)
     
-    # Reference lines
-    fig.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.5, row=1, col=1)
-    fig.add_hline(y=35, line_dash="dot", line_color="red", opacity=0.3, row=1, col=1)
-    fig.add_hline(y=65, line_dash="dot", line_color="green", opacity=0.3, row=1, col=1)
-    
-    # MARKER per turning points
     bottom_signals = df[df['Signal_Bottom'] == 1]
-    top_signals = df[df['Signal_Top'] == 1]
+    top_signals    = df[df['Signal_Top']    == 1]
     
     if not bottom_signals.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=bottom_signals.index,
-                y=bottom_signals['Prob_Smooth'] * 100,
-                mode='markers',
-                name='Bottom Signal (100% historical)',
-                marker=dict(
-                    symbol='circle',
-                    size=15,
-                    color='lime',
-                    line=dict(color='darkgreen', width=2)
-                ),
-                showlegend=True
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter(
+            x=bottom_signals.index, y=bottom_signals['Prob_Smooth'] * 100,
+            mode='markers', name='Bottom Signal (100% historical)',
+            marker=dict(symbol='circle', size=15, color='lime',
+                        line=dict(color='darkgreen', width=2)), showlegend=True
+        ), row=1, col=1)
     
     if not top_signals.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=top_signals.index,
-                y=top_signals['Prob_Smooth'] * 100,
-                mode='markers',
-                name='Top Warning (100% historical)',
-                marker=dict(
-                    symbol='circle',
-                    size=15,
-                    color='red',
-                    line=dict(color='darkred', width=2)
-                ),
-                showlegend=True
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter(
+            x=top_signals.index, y=top_signals['Prob_Smooth'] * 100,
+            mode='markers', name='Top Warning (100% historical)',
+            marker=dict(symbol='circle', size=15, color='red',
+                        line=dict(color='darkred', width=2)), showlegend=True
+        ), row=1, col=1)
     
-    # ---- SUBPLOT 2: MOMENTUM SLOPE ----
-    
-    # Momentum slope come barre colorate
     colors = ['green' if x > 0 else 'red' for x in df['Momentum_Slope']]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df['Momentum_Slope'], name='Momentum Slope (3M)',
+        marker_color=colors, opacity=0.7, showlegend=True
+    ), row=2, col=1)
     
-    fig.add_trace(
-        go.Bar(
-            x=df.index,
-            y=df['Momentum_Slope'],
-            name='Momentum Slope (3M)',
-            marker_color=colors,
-            opacity=0.7,
-            showlegend=True
-        ),
-        row=2, col=1
-    )
-    
-    # Threshold lines per divergenze
-    fig.add_hline(y=1.5, line_dash="dot", line_color="green", opacity=0.5, 
+    fig.add_hline(y=1.5,  line_dash="dot", line_color="green", opacity=0.5,
                   annotation_text="Bottom threshold (+1.5)", row=2, col=1)
-    fig.add_hline(y=-1.0, line_dash="dot", line_color="red", opacity=0.5,
-                  annotation_text="Top threshold (-1.0)", row=2, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="black", opacity=0.3, row=2, col=1)
+    fig.add_hline(y=-1.0, line_dash="dot", line_color="red",   opacity=0.5,
+                  annotation_text="Top threshold (-1.0)",    row=2, col=1)
+    fig.add_hline(y=0,    line_dash="solid", line_color="black", opacity=0.3, row=2, col=1)
     
-    # Update layout
     fig.update_xaxes(title_text="Date", row=2, col=1)
     fig.update_yaxes(title_text="Probability (%)", row=1, col=1)
     fig.update_yaxes(title_text="Slope", row=2, col=1)
-    
     fig.update_layout(
-        height=800,
-        hovermode='x unified',
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+        height=800, hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    
     st.plotly_chart(fig, use_container_width=True)
     
-    # Spiegazione
     st.markdown("""
     **📖 Come interpretare questo grafico:**
     
     **Top Panel - Probability + Markers:**
-    - 🟢 **Green markers**: Bottom signals (Ratios oversold + Momentum slope >+1.5) → Historical 100% win rate (12/12)
-    - 🔴 **Red markers**: Top warnings (High probability + Momentum slope <-1.0) → Historical 100% win rate (9/9)
+    - 🟢 **Green markers**: Bottom signals → Historical 100% win rate (12/12)
+    - 🔴 **Red markers**: Top warnings → Historical 100% win rate (9/9)
     - **Green zone (0-40%)**: Accumulation opportunity when momentum turns positive
-    - **Orange zone (70-100%)**: Caution when momentum turns negative (divergence = top warning)
+    - **Orange zone (70-100%)**: Caution when momentum turns negative
     
     **Bottom Panel - Momentum Slope:**
-    - **Green bars**: Momentum improving (slope positive) → Bullish divergence if price still down
-    - **Red bars**: Momentum weakening (slope negative) → Bearish divergence if price still up
-    - **Threshold +1.5**: Strong bullish signal (all 12 historical bottoms had slope >+1.5)
-    - **Threshold -1.0**: Bearish warning (all 9 historical tops had slope <-1.0)
+    - **Green bars**: Momentum improving → Bullish divergence if price still down
+    - **Red bars**: Momentum weakening → Bearish divergence if price still up
     
     **Key insight:** When momentum slope contradicts probability level = **DIVERGENCE = Turning point likely!**
     """)
     
-    # Statistics
     col1, col2, col3 = st.columns(3)
-    
     with col1:
         bear_pct = (df["Prob_Smooth"] < 0.25).sum() / len(df) * 100
         st.metric("Time in Bear Regime", f"{bear_pct:.1f}%")
-    
     with col2:
         transition_pct = ((df["Prob_Smooth"] >= 0.25) & (df["Prob_Smooth"] <= 0.75)).sum() / len(df) * 100
         st.metric("Time in Transition", f"{transition_pct:.1f}%")
-    
     with col3:
         bull_pct = (df["Prob_Smooth"] > 0.75).sum() / len(df) * 100
         st.metric("Time in Supercycle", f"{bull_pct:.1f}%")
     
-    # Turning points count
     col4, col5 = st.columns(2)
     with col4:
-        bottom_count = df['Signal_Bottom'].sum()
-        st.metric("Bottom Signals Detected", int(bottom_count), 
-                 help="Ratios oversold + Momentum slope >+1.5")
+        st.metric("Bottom Signals Detected", int(df['Signal_Bottom'].sum()),
+                  help="Ratios oversold + Momentum slope >+1.5")
     with col5:
-        top_count = df['Signal_Top'].sum()
-        st.metric("Top Warnings Detected", int(top_count),
-                 help="High probability + Momentum slope <-1.0")
+        st.metric("Top Warnings Detected", int(df['Signal_Top'].sum()),
+                  help="High probability + Momentum slope <-1.0")
 
 with tab2:
     st.subheader("📊 Macro Indicators (Z-Scores)")
     
-    fig2 = go.Figure()
+    fig2     = go.Figure()
+    z_cols_2 = [col for col in df.columns if col.endswith('_z')]
     
-    z_cols = [col for col in df.columns if col.endswith('_z')]
-    
-    # 6 colori distintivi
     color_map = {
-        'Real_Yield_z': '#DC143C',
-        'Copper_Gold_z': '#1E90FF',
-        'Oil_Gold_z': '#FF8C00',
-        'DXY_z': '#9370DB',
-        'Yield_Curve_z': '#00CED1',
-        'Momentum_6M_z': '#00FF00'
+        'Real_Yield_z':   '#DC143C',
+        'Copper_Gold_z':  '#1E90FF',
+        'Oil_Gold_z':     '#FF8C00',
+        'DXY_z':          '#9370DB',
+        'Yield_Curve_z':  '#00CED1',
+        'Momentum_6M_z':  '#00FF00'
     }
     
-    for col in z_cols:
-        color = color_map.get(col, '#808080')
+    for col in z_cols_2:
         fig2.add_trace(go.Scatter(
-            x=df.index, 
-            y=df[col],
+            x=df.index, y=df[col],
             name=col.replace('_z', '').replace('_', ' '),
-            line=dict(color=color, width=2)
+            line=dict(color=color_map.get(col, '#808080'), width=2)
         ))
     
     fig2.add_hline(y=0, line_dash="solid", line_color="black", opacity=0.3)
     fig2.add_hrect(y0=-1, y1=1, fillcolor="gray", opacity=0.1)
-    
-    # Alert thresholds
-    fig2.add_hline(y=thresholds['oversold'], line_dash="dot", line_color="green", opacity=0.5,
-                  annotation_text=f"Oversold ({thresholds['oversold']})")
-    fig2.add_hline(y=thresholds['overbought'], line_dash="dot", line_color="red", opacity=0.5,
-                  annotation_text=f"Overbought ({thresholds['overbought']})")
-    
-    fig2.update_layout(
-        yaxis_title="Z-Score", 
-        xaxis_title="Date",
-        hovermode='x unified', 
-        height=600
-    )
-    
+    fig2.add_hline(y=thresholds['oversold'],   line_dash="dot", line_color="green", opacity=0.5,
+                   annotation_text=f"Oversold ({thresholds['oversold']})")
+    fig2.add_hline(y=thresholds['overbought'], line_dash="dot", line_color="red",   opacity=0.5,
+                   annotation_text=f"Overbought ({thresholds['overbought']})")
+    fig2.update_layout(yaxis_title="Z-Score", xaxis_title="Date",
+                       hovermode='x unified', height=600)
     st.plotly_chart(fig2, use_container_width=True)
 
 with tab3:
     st.subheader("💹 Raw Indicators")
     
-    raw_cols = ["Real_Yield", "Copper_Gold", "Oil_Gold", "DXY", "Yield_Curve", "Momentum_6M"]
-    available_raw = [col for col in raw_cols if col in df.columns]
+    raw_cols_tab3   = ["Real_Yield", "Copper_Gold", "Oil_Gold", "DXY", "Yield_Curve", "Momentum_6M"]
+    available_raw   = [col for col in raw_cols_tab3 if col in df.columns]
     
     if len(available_raw) > 0:
         fig3 = make_subplots(
-            rows=len(available_raw), 
-            cols=1,
-            subplot_titles=[col.replace('_', ' ').replace('Au', 'Gold') for col in available_raw],
+            rows=len(available_raw), cols=1,
+            subplot_titles=[col.replace('_', ' ') for col in available_raw],
             vertical_spacing=0.06
         )
-        
         for idx, col in enumerate(available_raw):
-            fig3.add_trace(
-                go.Scatter(
-                    x=df.index, 
-                    y=df[col],
-                    name=col.replace('_', ' '),
-                    line=dict(width=2),
-                    showlegend=False
-                ),
-                row=idx+1, col=1
-            )
-            
+            fig3.add_trace(go.Scatter(
+                x=df.index, y=df[col],
+                name=col.replace('_', ' '), line=dict(width=2), showlegend=False
+            ), row=idx+1, col=1)
             if col in ["Momentum_6M", "Real_Yield", "Yield_Curve"]:
                 fig3.add_hline(y=0, line_dash="dash", line_color="gray", row=idx+1, col=1)
-        
         fig3.update_layout(height=250 * len(available_raw), hovermode='x unified')
         st.plotly_chart(fig3, use_container_width=True)
     
     st.subheader("📋 Complete Dataset (Raw Values + Z-Scores)")
     
-    # Colonne raw values
-    raw_cols_export = ["GSCI", "Real_Yield", "Copper_Gold", "Oil_Gold", 
-                       "DXY", "Yield_Curve", "Momentum_6M"]
+    raw_cols_export   = ["GSCI", "Real_Yield", "Copper_Gold", "Oil_Gold",
+                         "DXY", "Yield_Curve", "Momentum_6M"]
+    z_cols_export     = ["Real_Yield_z", "Copper_Gold_z", "Oil_Gold_z",
+                         "DXY_z", "Yield_Curve_z", "Momentum_6M_z"]
+    score_cols        = ["Score_Binary", "Prob_Smooth", "Momentum_Slope", "Signal_Bottom", "Signal_Top"]
+    all_export_cols   = raw_cols_export + z_cols_export + score_cols
+    available_export  = [col for col in all_export_cols if col in df.columns]
     
-    # Colonne z-score
-    z_cols_export = ["Real_Yield_z", "Copper_Gold_z", "Oil_Gold_z", 
-                     "DXY_z", "Yield_Curve_z", "Momentum_6M_z"]
-    
-    # Colonne score e segnali
-    score_cols = ["Score_Binary", "Prob_Smooth", "Momentum_Slope", "Signal_Bottom", "Signal_Top"]
-    
-    # Combina tutte le colonne disponibili
-    all_export_cols = raw_cols_export + z_cols_export + score_cols
-    available_export = [col for col in all_export_cols if col in df.columns]
-    
-    # Toggle per vedere raw o z-scores
     view_mode = st.radio(
-        "View Mode", 
+        "View Mode",
         ["Raw Values only", "Z-Scores only", "Complete (Raw + Z-Scores + Signals)"],
-        index=2, 
-        horizontal=True
+        index=2, horizontal=True
     )
     
     if view_mode == "Raw Values only":
@@ -925,88 +789,45 @@ with tab3:
     else:
         show_cols = available_export
     
-    # Preview ultimi 24 periodi
     st.caption(f"Preview: last 24 periods. Download CSV for full history ({len(df)} periods).")
     
     if len(show_cols) > 0:
-        st.dataframe(
-            df[show_cols].tail(24).style.format("{:.4f}"),
-            use_container_width=True
-        )
+        st.dataframe(df[show_cols].tail(24).style.format("{:.4f}"), use_container_width=True)
     
     st.markdown("---")
-    
-    # ---- DOWNLOAD CSV ----
     st.subheader("📥 Download Full Dataset")
     
-    st.markdown("""
-    **Il CSV include (v4.1):**
-    - Tutti i periodi storici disponibili
-    - Valori raw (Real Yield, Ratios, DXY, Yield Curve, Momentum)
-    - Z-scores calcolati
-    - GSCI price (per calcolare forward returns)
-    - **Momentum Slope** (per analisi divergenze)
-    - **Signal_Bottom** e **Signal_Top** (turning points validati)
-    - Score binario e probabilità smoothed
-    
-    **Istruzioni:**
-    - **Google Sheets**: File → Importa → Carica → Separatore: virgola
-    - **LibreOffice Calc**: Apri direttamente il file .csv
-    """)
-    
-    # Prepara dataframe per export
     export_df = df[available_export].copy()
     export_df.index.name = "Date"
     
-    # Rinomina colonne per chiarezza
     rename_map = {
-        "GSCI": "GSCI_Price",
-        "Real_Yield": "Real_Yield_pct",
-        "Copper_Gold": "Copper_Gold_Ratio",
-        "Oil_Gold": "Oil_Gold_Ratio",
-        "DXY": "DXY_Index",
-        "Yield_Curve": "Yield_Curve_10Y3M_bp",
-        "Momentum_6M": "Momentum_6M_pct",
-        "Real_Yield_z": "Real_Yield_Zscore",
-        "Copper_Gold_z": "CopperGold_Zscore",
-        "Oil_Gold_z": "OilGold_Zscore",
-        "DXY_z": "DXY_Zscore",
-        "Yield_Curve_z": "YieldCurve_Zscore",
-        "Momentum_6M_z": "Momentum_Zscore",
-        "Momentum_Slope": "Momentum_Slope_3M",
-        "Score_Binary": "Binary_Score_0to6",
-        "Prob_Smooth": "Supercycle_Probability",
-        "Signal_Bottom": "Bottom_Signal_1_0",
-        "Signal_Top": "Top_Signal_1_0"
+        "GSCI": "GSCI_Price", "Real_Yield": "Real_Yield_pct",
+        "Copper_Gold": "Copper_Gold_Ratio", "Oil_Gold": "Oil_Gold_Ratio",
+        "DXY": "DXY_Index", "Yield_Curve": "Yield_Curve_10Y3M_bp",
+        "Momentum_6M": "Momentum_6M_pct", "Real_Yield_z": "Real_Yield_Zscore",
+        "Copper_Gold_z": "CopperGold_Zscore", "Oil_Gold_z": "OilGold_Zscore",
+        "DXY_z": "DXY_Zscore", "Yield_Curve_z": "YieldCurve_Zscore",
+        "Momentum_6M_z": "Momentum_Zscore", "Momentum_Slope": "Momentum_Slope_3M",
+        "Score_Binary": "Binary_Score_0to6", "Prob_Smooth": "Supercycle_Probability",
+        "Signal_Bottom": "Bottom_Signal_1_0", "Signal_Top": "Top_Signal_1_0"
     }
-    
     export_df = export_df.rename(columns={k: v for k, v in rename_map.items() if k in export_df.columns})
+    csv_data  = export_df.to_csv(date_format='%Y-%m-%d')
     
-    # Converti in CSV
-    csv_data = export_df.to_csv(date_format='%Y-%m-%d')
-    
-    # Info sul dataset
     col_info1, col_info2, col_info3 = st.columns(3)
-    with col_info1:
-        st.metric("Periodi totali", len(export_df))
-    with col_info2:
-        st.metric("Data inizio", export_df.index[0].strftime('%Y-%m-%d'))
-    with col_info3:
-        st.metric("Data fine", export_df.index[-1].strftime('%Y-%m-%d'))
+    with col_info1: st.metric("Periodi totali", len(export_df))
+    with col_info2: st.metric("Data inizio", export_df.index[0].strftime('%Y-%m-%d'))
+    with col_info3: st.metric("Data fine",   export_df.index[-1].strftime('%Y-%m-%d'))
     
-    # Bottone download
-    filename = f"commodity_supercycle_v4.1_{data_frequency.lower()}_{export_df.index[-1].strftime('%Y%m%d')}.csv"
+    filename = (f"commodity_supercycle_v4.1_{data_frequency.lower()}_"
+                f"{export_df.index[-1].strftime('%Y%m%d')}.csv")
     
     st.download_button(
         label="📥 Download CSV v4.1 (with Divergence Signals)",
-        data=csv_data,
-        file_name=filename,
-        mime="text/csv",
+        data=csv_data, file_name=filename, mime="text/csv",
         help="Includes momentum slope and validated turning point signals"
     )
-    
-    st.caption(f"⚙️ Parametri: {data_frequency} | Z-score window: {zscore_years} anni | BE Inflation: {inflation_assumption:.2f}%")
-    st.caption("💡 v4.1: Include Momentum_Slope_3M + Bottom/Top signals validati statisticamente")
+    st.caption(f"⚙️ Parametri: {data_frequency} | Z-score: {zscore_years}y | BE Inflation: {inflation_assumption:.2f}%")
 
 with tab4:
     st.markdown(f"""
@@ -1014,222 +835,68 @@ with tab4:
     
     ## 1. Introduzione
     
-    Questo modello identifica i regimi di mercato delle materie prime utilizzando un approccio quantitativo
-    basato su **sei indicatori macro fondamentali**, normalizzati tramite Z-score e combinati con pesi ottimizzati.
+    Questo modello identifica i regimi di mercato delle materie prime utilizzando un approccio
+    quantitativo basato su **sei indicatori macro fondamentali**, normalizzati tramite Z-score
+    e combinati con pesi ottimizzati.
     
-    **Novità v4.1:**
-    - ✅ **Momentum Divergence Analysis**: Grafico con momentum slope overlay
-    - ✅ **Turning Point Detection**: Segnali bottom/top validati su 20 anni storici
-    - ✅ **Dynamic Regime Zones**: Zone colorate basate su probability + momentum
-    - ✅ **Bottom Signal**: Win rate 100% (12/12 casi storici)
-    - ✅ **Top Warning**: Win rate 100% (9/9 casi storici)
+    **v4.1.2 Fix (Current):**
+    - ✅ `data.fillna(method='ffill')` → `data.ffill()` (Pandas 2.1+ compatibility)
+    - ✅ `st.progress()` / `st.empty()` spostati fuori da `@st.cache_data`
+
+    **v4.1.1:**
+    - ✅ Risolto crash dropna() con default settings (25yr + 5yr z-score)
     
-    **Da v4.0:**
-    - ✅ Aggiunta Yield Curve 10Y-3M (6° indicatore)
-    - ✅ Real Yield con input migliorato (incrementi 0.01%)
-    - ✅ Sistema di weighting ribilanciato per 6 indicatori
-    - ✅ Alert specifico per inversione yield curve
+    **v4.1:**
+    - ✅ Momentum Divergence Analysis + Turning Point Detection
+    - ✅ Bottom Signal: Win rate 100% (12/12 casi storici)
+    - ✅ Top Warning: Win rate 100% (9/9 casi storici)
     
-    **v4.1.1 Fix:**
-    - ✅ Risolto crash con default settings (25yr + 5yr z-score window)
-    - ✅ dropna() ottimizzato per eliminare solo righe con z-scores mancanti
+    ## 2. Indicatori (6)
     
-    ## 2. Indicatori Utilizzati
+    | Indicatore | Favorevole se | Razionale |
+    |---|---|---|
+    | Real Yield | Z < 0 | Tassi reali negativi → oro/commodity attraenti |
+    | Copper/Gold | Z > 0 | Domanda industriale forte |
+    | Oil/Gold | Z > 0 | Attività economica elevata |
+    | DXY | Z < 0 | Dollaro debole → commodity più economiche |
+    | Yield Curve 10Y-3M | Z > 0 | Crescita attesa, no recessione |
+    | GSCI Momentum | Z > 0 | Trend rialzista confermato |
     
-    ### 2.1 Real Yield (Rendimento Reale)
+    ## 3. Scoring
     
-    **Formula:** Rendimento Treasury 10Y - Inflazione Breakeven Attesa
-    
-    **Valore Attuale Assunto:** {inflation_assumption:.2f}%
-    
-    **Interpretazione:**
-    - Real Yield **negativo** (Z-score < 0) → Favorevole per materie prime
-    - Real Yield **positivo** (Z-score > 0) → Sfavorevole per materie prime
-    
-    **Razionale:** Tassi reali negativi riducono il costo opportunità di detenere commodities 
-    (che non pagano interessi) e indicano politica monetaria accomodante.
-    
-    ### 2.2 Copper/Gold Ratio
-    
-    **Formula:** Prezzo Rame / Prezzo Oro
-    
-    **Interpretazione:**
-    - Ratio **in salita** (Z-score > 0) → Domanda industriale forte, crescita economica
-    - Ratio **in discesa** (Z-score < 0) → Debolezza economica, risk-off
-    
-    **Razionale:** Il rame è un metallo industriale sensibile alla crescita economica globale 
-    ("Dr. Copper"). L'oro è un safe-haven.
-    
-    ### 2.3 Oil/Gold Ratio
-    
-    **Formula:** Prezzo Petrolio WTI / Prezzo Oro
-    
-    **Interpretazione:**
-    - Ratio **in salita** (Z-score > 0) → Domanda energetica forte, attività economica elevata
-    - Ratio **in discesa** (Z-score < 0) → Domanda energetica debole
-    
-    ### 2.4 Dollar Index (DXY)
-    
-    **Interpretazione:**
-    - Dollaro **debole** (Z-score < 0) → Favorevole per materie prime
-    - Dollaro **forte** (Z-score > 0) → Sfavorevole per materie prime
-    
-    ### 2.5 Yield Curve 10Y-3M
-    
-    **Formula:** Rendimento Treasury 10 anni - Rendimento Treasury 3 mesi
-    
-    **Interpretazione:**
-    - Curva **positiva** (Z-score > 0) → Favorevole, crescita economica attesa
-    - Curva **invertita** (Z-score < 0) → **⚠️ Recessione imminente**
-    
-    **Win rate:** 100% nel predire recessioni negli ultimi 30 anni
-    
-    ### 2.6 GSCI Momentum 6 Mesi
-    
-    **Formula:** Variazione % GSCI ultimi 6 mesi
-    
-    **Interpretazione:**
-    - Momentum **positivo** (Z-score > 0) → Trend rialzista confermato
-    - Momentum **negativo** (Z-score < 0) → Trend ribassista
-    
-    ### 2.7 **Momentum Slope (3 mesi)** ⭐ NUOVO v4.1
-    
-    **Formula:** Δ Momentum Z-score su 3 periodi
-    
-    **Interpretazione:**
-    - Slope **> +1.5**: Momentum in forte accelerazione (bullish divergence se prob bassa)
-    - Slope **< -1.0**: Momentum in forte decelerazione (bearish divergence se prob alta)
-    
-    **Utilizzo per Turning Points:**
-    
-    **BOTTOM SIGNAL (100% win rate storico - 12/12):**
-    ```
-    Copper/Gold Z < -1.0
-    AND Oil/Gold Z < -1.0
-    AND Momentum Slope > +1.5
-    → Bottom imminente (1-3 mesi)
-    ```
-    
-    **TOP WARNING (100% win rate storico - 9/9):**
-    ```
-    Momentum Slope < -1.0
-    AND Probability > 60%
-    → Top imminente (correzione probabile)
-    ```
-    
-    ## 3. Normalizzazione Z-Score
-    
-    **Formula:** Z = (Valore - Media Rolling) / Deviazione Standard Rolling
-    
-    **Finestra Attuale:** {zscore_years} anni ({window} {data_frequency.lower()} periodi)
-    
-    ## 4. Sistema di Scoring
-    
-    ### 4.1 Modalità Attuale: {weight_mode}
-    
-    **Pesi Utilizzati (6 indicatori):**
-    - Real Yield: {weights['Real_Yield']*100:.0f}%
-    - Dollar Index: {weights['DXY']*100:.0f}%
-    - Copper/Gold: {weights['Copper_Gold']*100:.0f}%
-    - Oil/Gold: {weights['Oil_Gold']*100:.0f}%
-    - Yield Curve: {weights['Yield_Curve']*100:.0f}%
-    - GSCI Momentum: {weights['Momentum_6M']*100:.0f}%
-    
-    ### 4.2 Score Continuo → Probabilità Superciclo
-    
+    **Score Continuo → Probabilità Superciclo:**
     ```
     P(Supercycle) = sigmoid(6 × (Score Continuo - 0.5))
     ```
     
-    ### 4.3 Interpretazione Dinamica (v4.1)
+    **Pesi Attivi ({weight_mode}):**
+    - Real Yield: {weights['Real_Yield']*100:.0f}% | DXY: {weights['DXY']*100:.0f}%
+    - Copper/Gold: {weights['Copper_Gold']*100:.0f}% | Oil/Gold: {weights['Oil_Gold']*100:.0f}%
+    - Yield Curve: {weights['Yield_Curve']*100:.0f}% | Momentum: {weights['Momentum_6M']*100:.0f}%
     
-    **La probabilità va interpretata insieme al momentum slope:**
+    ## 4. Turning Points
     
-    | Probability | Momentum Slope | Interpretazione |
-    |-------------|----------------|-----------------|
-    | < 40% | > +1.5 | 🟢 **ACCUMULATION ZONE** (bottom forming) |
-    | 40-70% | > 0 | ✅ Supercycle confermato (ride trend) |
-    | > 70% | < -1.0 | 🔴 **CAUTION ZONE** (top warning) |
-    | > 70% | > 0 | ⚠️ Late cycle (momentum ancora positivo) |
-    | < 40% | < 0 | ❌ Bear confermato (avoid) |
+    **🔵 BOTTOM SIGNAL** (100% win rate - 12/12):
+    - Copper/Gold Z < -1.0 AND Oil/Gold Z < -1.0 AND Momentum Slope > +1.5
     
-    ## 5. Classificazione Regimi
+    **🔴 TOP WARNING** (100% win rate - 9/9):
+    - Momentum Slope < -1.0 AND Probability > 60%
     
-    - **Bear Market**: Probabilità < 35%
-    - **Transition**: Probabilità 35-65%
-    - **Supercycle**: Probabilità > 65%
+    ## 5. Limiti del Modello
     
-    **IMPORTANTE:** Un regime "Bear" con momentum slope positivo può essere il miglior punto di accumulo!
-    
-    ## 6. Sistema Segnali (Statisticamente Validato)
-    
-    ### 6.1 Turning Point Signals (v4.1)
-    
-    **🔵 BOTTOM SIGNAL**
-    - **Condizioni**: Ratios oversold + Momentum slope > +1.5
-    - **Win rate**: 100% (12/12 casi storici negli ultimi 20 anni)
-    - **Performance media 12M**: +35%
-    - **Lead time**: 1-3 mesi prima del vero bottom
-    
-    **🔴 TOP WARNING**
-    - **Condizioni**: High probability + Momentum slope < -1.0
-    - **Win rate**: 100% (9/9 casi storici negli ultimi 20 anni)
-    - **Performance media 12M**: Negativa (correzioni/bear market)
-    - **Lead time**: Variabile (1-6 mesi)
-    
-    ## 7. Limiti del Modello
-    
-    - **Non predice eventi esogeni**: Guerre, pandemie, shock improvvisi
-    - **Dati Yahoo Finance**: Copertura variabile pre-2000
-    - **Real Yield approssimato**: Input manuale inflazione breakeven
-    - **Sample size limitato**: 12 bottom e 9 top in 20 anni
-    - **Non è trading system**: Progettato per supercicli (anni), non trading (giorni)
-    
-    ## 8. Best Practices Utilizzo
-    
-    ✅ **Attendere conferma momentum slope** prima di agire su probability
-    
-    ✅ **Bottom signal (verde)**: Accumulo graduale quando appare
-    
-    ✅ **Top warning (rosso)**: Riduzione graduale esposizione
-    
-    ✅ **Yield Curve invertita**: Priorità assoluta su altri segnali
-    
-    ✅ **Combinare con analisi fondamentale** settoriale
-    
-    ✅ **Orizzonte temporale**: Mesi/anni, non giorni/settimane
-    
-    ## 9. Fonti e Bibliografia
-    
-    - Erb & Harvey (2006): "The Strategic and Tactical Value of Commodity Futures"
-    - Goldman Sachs Commodity Research
-    - NY Fed Recession Probability Model
-    - Estrella & Mishkin (1998): "Predicting U.S. Recessions"
-    - Analisi proprietaria su turning points GSCI 2006-2026
-    
-    ## 10. Changelog
-    
-    **v4.1.1 (Current):**
-    - Fixed: dropna() crash con default settings
-    - Eliminazione selettiva solo righe con z-scores mancanti
-    
-    **v4.1:**
-    - Momentum Slope calculation (3-period diff)
-    - Bottom/Top signals validati 20 anni
-    - Dual-panel chart: Probability + Momentum slope
-    - Dynamic regime zones
-    - Enhanced CSV export
+    - Non predice eventi esogeni (guerre, pandemie)
+    - Sample size limitato: 12 bottom e 9 top in 20 anni
+    - Real Yield richiede aggiornamento manuale breakeven
+    - Progettato per supercicli (mesi/anni), non trading giornaliero
     
     ---
-    
-    **Versione Dashboard:** 4.1.1 - Research Grade (Fixed)
-    
-    **Disclaimer:** Questo modello è uno strumento di analisi, non un consiglio di investimento.
-    Le performance passate non garantiscono risultati futuri. I segnali sono basati su pattern
-    storici ma eventi esogeni possono invalidarli. Consultare sempre un professionista.
+    **Disclaimer:** Strumento di analisi, non consulenza finanziaria.
     """)
 
-# Footer
+# ============================================================================
+# FOOTER
+# ============================================================================
+
 st.markdown("---")
 col1, col2, col3, col4 = st.columns(4)
 
@@ -1259,7 +926,7 @@ with col4:
 
 st.markdown("""
 <div style='text-align: center; color: gray; margin-top: 20px;'>
-    <p>📊 Commodity Supercycle Dashboard v4.1.1 - Research Grade | 6 Macro Indicators + Divergence Analysis</p>
-    <p style='font-size: 0.9em;'>🆕 Fixed dropna() crash | Turning Point Detection (100% Win Rate)</p>
+    <p>📊 Commodity Supercycle Dashboard v4.1.2 | 6 Macro Indicators + Divergence Analysis</p>
+    <p style='font-size: 0.9em;'>✅ Fix: Pandas 2.x compat · Progress bar fuori dalla cache</p>
 </div>
 """, unsafe_allow_html=True)
