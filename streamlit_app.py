@@ -185,7 +185,7 @@ def load_data(years, frequency, inflation_rate, zscore_years):
     if frequency == "Weekly":
         data = data.resample('W').last()
     else:
-        data = data.resample('M').last()
+        data = data.resample('ME').last()
 
     # FIX #1: data.fillna(method='ffill', limit=2) → data.ffill(limit=2)
     # Il parametro method= è stato deprecato in Pandas 2.1 e rimosso in Pandas 3.x.
