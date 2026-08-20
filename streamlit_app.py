@@ -504,18 +504,22 @@ def check_alerts(row, thresholds):
             'severity': 'high',
             'message': 'Ratios oversold + Momentum divergence detected',
             'color': 'info',
-            'context': 'Pattern storico osservato su un campione piccolo (verifica tab Metodologia — '
-                        'i "win rate" citati altrove non sono ricalcolati dinamicamente su questo dataset, '
-                        'trattali con cautela statistica).'
+            'context': 'Verifica statistica (t-test + Mann-Whitney su fwd return 6M/18M vs benchmark): '
+                        'p-value < 0.002, segnale coerente su 3 episodi macro distinti (2009, 2016, 2020). '
+                        'N effettivo = 3 episodi, non il numero di mesi con segnale attivo: i mesi consecutivi '
+                        'nello stesso episodio non sono osservazioni indipendenti. Zona di ingresso utile, '
+                        'ma non ancora validata su un quarto episodio out-of-sample.'
         })
 
     if 'Signal_Top' in row.index and row['Signal_Top'] == 1:
         signals.append({
-            'type': '🔴 TOP FORMATION WARNING',
-            'severity': 'high',
+            'type': '🟡 TOP FORMATION WARNING (bassa affidabilità)',
+            'severity': 'medium',
             'message': 'High probability + Negative momentum slope detected',
-            'color': 'warning',
-            'context': 'Pattern storico osservato su un campione piccolo — stessa cautela statistica del Bottom Signal.'
+            'color': 'info',
+            'context': 'Verifica statistica (t-test su fwd return 6M/18M vs benchmark): p-value 0.58-0.70, '
+                        'non distinguibile dal rumore. Timing storicamente incoerente rispetto ai picchi di prezzo '
+                        'reali (anticipa o ritarda). Trattare come informazione di contesto, non come segnale operativo.'
         })
 
     oversold_count      = 0
@@ -774,9 +778,9 @@ with tab1:
     if not top_signals.empty:
         fig.add_trace(go.Scatter(
             x=top_signals.index, y=top_signals['Prob_Smooth'] * 100,
-            mode='markers', name='Top Warning',
-            marker=dict(symbol='circle', size=15, color='red',
-                        line=dict(color='darkred', width=2)), showlegend=True
+            mode='markers', name='Top Warning (bassa affidabilità, vedi Metodologia)',
+            marker=dict(symbol='circle', size=13, color='orange',
+                        line=dict(color='darkorange', width=2)), showlegend=True
         ), row=1, col=1)
 
     colors = ['green' if x > 0 else 'red' for x in df['Momentum_Slope']]
@@ -1039,14 +1043,30 @@ with tab4:
     **🔵 BOTTOM SIGNAL:**
     - Copper/Gold Z < -1.0 AND Oil/Gold Z < -1.0 AND Momentum Slope > +1.5
 
-    **🔴 TOP WARNING:**
+    **🟡 TOP WARNING (bassa affidabilità — vedi sotto):**
     - Momentum Slope < -1.0 AND Probability > 60%
 
     Il numero di occorrenze storiche di questi segnali è mostrato nel Tab 1 ("Bottom/Top Signals
     Detected") ed è **ricalcolato dinamicamente** sul dataset corrente (anni/frequenza/z-score
-    window selezionati in sidebar). Con un campione dell'ordine di poche decine di occorrenze su
-    10-30 anni di storico, qualunque hit rate va interpretato con cautela statistica: non è
-    validato out-of-sample e le soglie non sono state sottoposte a walk-forward testing.
+    window selezionati in sidebar).
+
+    **Verifica statistica effettuata (agosto 2026)** — confronto dei rendimenti forward di GSCI
+    a 6 e 18 mesi dopo ogni segnale, contro il benchmark di tutte le osservazioni disponibili:
+
+    | Segnale | N episodi indipendenti | Media Fwd 6M vs benchmark | Media Fwd 18M vs benchmark | p-value (t-test) |
+    |---|---|---|---|---|
+    | Bottom Signal | 3 (2009, 2016, 2020) | +21.1% vs +2.1% | +55.7% vs +6.6% | 0.001 – 0.0007 |
+    | Top Warning | 8 mesi isolati, nessun cluster ricorrente | -0.9% vs +2.1% | +2.5% vs +6.6% | 0.70 – 0.58 |
+
+    **Bottom Signal:** differenza statisticamente significativa e direzionalmente coerente su
+    tutti e 3 gli episodi macro osservati. Attenzione: N effettivo = 3 episodi distinti, non il
+    numero di mesi con segnale attivo (i mesi consecutivi nello stesso episodio non sono
+    osservazioni indipendenti). Non ancora validato su un quarto episodio out-of-sample.
+
+    **Top Warning:** la differenza rispetto al benchmark NON è statisticamente distinguibile dal
+    rumore (p-value 0.58-0.70). Il timing storico rispetto ai picchi di prezzo reali di GSCI è
+    incoerente (anticipa o ritarda a seconda dell'episodio). Da trattare come informazione di
+    contesto, non come segnale operativo, finché non emerge un pattern più robusto.
 
     ## 5. Limiti del Modello
 
